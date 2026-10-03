@@ -48,6 +48,8 @@
 你点 Merge → issue 自动关闭，远端分支自动删除
 ```
 
+下一轮 `just autoqueue` 拿到锁并完成 `git fetch` 后、挑候选之前，会清掉已关闭 issue 上的 `factory:pr-open`；其他标签（尤其是 `factory:needs-human`）保持不变。`--dry-run` 只打印清理预览，不改标签；清理失败会输出诊断，但不阻塞正常排队，也不改变本轮退出码。`feedback` 和 `cron` 子命令不执行这一步。
+
 ## 4. 每个标签的含义
 
 | 标签 | 贴在 | 谁打 | 含义 |
