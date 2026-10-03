@@ -87,11 +87,19 @@ simple-sdlc *ARGS:
 issue NUMBER *ARGS:
     uv run adws/adw_issue.py --config {{config}} "$@"
 
+# review comments on a factory PR, through build + test, back onto the PR: just pr-feedback 5 [--check] [--dry-run]
+pr-feedback NUMBER *ARGS:
+    uv run adws/adw_pr_feedback.py --config {{config}} "$@"
+
 # ── 软件工厂：无人值守队列 ─────────────────────────────────────────────────
 
 # issues labelled factory:queued, one at a time, each in its own worktree (main checkout only)
 autoqueue *ARGS:
     uv run --no-project python scripts/autoqueue.py "$@"
+
+# factory PRs labelled factory:revise, one at a time, each in a worktree of its branch (main checkout only)
+autoqueue-feedback *ARGS:
+    uv run --no-project python scripts/autoqueue.py feedback "$@"
 
 # print a cron line only; never install: just autoqueue-cron [MINUTES]
 autoqueue-cron MINUTES="30":

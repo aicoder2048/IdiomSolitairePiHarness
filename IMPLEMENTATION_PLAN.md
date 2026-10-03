@@ -7,13 +7,13 @@
 - **方案 B（Pi 原生）**：人类输入在 `input` 事件里校验，合法才放行给 Pi 的 agent loop；Bot 只能通过 `submit_idiom` 工具出词，工具的 `execute()` 是唯一写账入口。
 - **Bot 模型**：`deepseek/$DEEPSEEK_MODEL`（`.env`），按量计费；裁判与提示用同一模型做嵌套调用。
 - **`/undo`**：快照栈，与 Python 版一致。
-- **工厂**：以 `../OptionTradingPiHarness` 打过补丁的 `adws/` 和 `.claude/skills/sssf/` 为基础；串行；沿用那边已实战打磨过的 `scripts/autoqueue.py`（每个 issue 一个 worktree，失败保留现场）；只处理 `FACTORY_AUTHORS`（默认 gh 当前用户）创建并打标签的 issue；只有 "Request changes" 触发 PR 反馈。
+- **工厂**：以 `../OptionTradingPiHarness` 打过补丁的 `adws/` 和 `.claude/skills/sssf/` 为基础；串行；沿用那边已实战打磨过的 `scripts/autoqueue.py`（每个 issue 一个 worktree，失败保留现场）；只处理 `FACTORY_AUTHORS`（默认 gh 当前用户）创建并打标签的 issue；PR 反馈由人给 PR 打 `factory:revise` 触发（GitHub 不允许对自己的 PR 点 Request changes）。
 
 ## Stage 1: 仓库引导
 **Goal**: git 仓库、`.gitignore`、`.env.example`、公开 GitHub 仓库 `aicoder2048/IdiomSolitairePiHarness`
 **Success Criteria**: `.env` 与第三方文章全文不进仓库；首次 push 前用户确认文件清单
 **Tests**: `git check-ignore .env docs/pi-docs/reference-articles/INDEX.md`
-**Status**: In Progress（本地完成，等待用户确认后建远端仓库并 push）
+**Status**: Complete（公开仓库 aicoder2048/IdiomSolitairePiHarness）
 
 ## Stage 2: 纯游戏引擎（TypeScript，不 import Pi）
 **Goal**: `src/engine/`：规则、Prompt、Verifier、Context、对局状态机（快照、计分、倒计时、命令）
@@ -31,10 +31,10 @@
 **Goal**: 移植 SSSF（roster 按 `sssf.config.yaml.sample`）、本项目的 `dev_guard.ts`、`quality.py` 接 `just test`；`adw_issue` 加标签状态机（`factory:queued → running → pr-open / needs-human`）
 **Success Criteria**: 一个打了 `factory:queued` 的 issue 能被处理成 PR，issue 下有进度评论
 **Tests**: `adws/tests/` 离线测试；一次真实 issue → PR 演练
-**Status**: In Progress（本地移植完成、离线测试全绿、scout 实跑通过；待建远端仓库后创建标签并做一次 issue→PR 演练）
+**Status**: In Progress（移植、标签就绪；issue #1 正在做 issue→PR 演练）
 
 ## Stage 5: PR 反馈回流、清理、交给工厂
 **Goal**: `adw_pr_feedback`（"Request changes" 触发，`--adw-id` 续跑同一分支）、`adw_cleanup`；剩余功能（`/hint` overlay、详版面板、结算画面、trace、战绩榜）开成 issue
 **Success Criteria**: 一次 Request changes → 工厂修订 → push → 回复评论的完整回路
 **Tests**: `adws/tests/` 离线测试；一次真实 review 演练
-**Status**: Not Started
+**Status**: In Progress（adw_pr_feedback + autoqueue feedback 通道已实现并有离线测试；触发改为 PR 标签 factory:revise，因为 GitHub 不允许对自己的 PR 点 Request changes；合并后自动删远端分支已开启；待真实演练）
