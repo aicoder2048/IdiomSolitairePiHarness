@@ -143,11 +143,13 @@ test("确定性命令 0 token", async () => {
     ["undo", ""],
     ["restart", "天"],
     ["status", ""],
+    ["chain", ""],
     ["help", ""],
   ] as const) {
     await pi.command(name, args);
   }
   expect(llm.calls).toEqual([]);
+  expect(pi.userMessages).toEqual([]);
 });
 
 test("/pass 开新回合并把回合 prompt 发给 Bot", async () => {
@@ -180,4 +182,56 @@ test("最后一轮结束时追加终局卡片", async () => {
   await pi.input("心想事成");
   await pi.submit("成竹在胸");
   expect(pi.cards().at(-1)![0]).toContain("对局结束");
+});
+
+
+test("/chain 空链只追加一张卡片，不调用模型或发送消息", async () => {
+  await pi.command("chain");
+  expect(pi.entries).toEqual([{
+    customType: "idiom-card", data: { title: "📜 接龙链", lines: ["还没有成语"] },
+  }]);
+  expect(llm.calls).toEqual([]);
+  expect(pi.userMessages).toEqual([]);
+});
+
+test("/chain 非空链逐行显示，查看不增加模型调用或消息", async () => {
+  await pi.input("心想事成");
+  await pi.submit("成竹在胸");
+  const calls = llm.calls.length;
+  const messages = [...pi.userMessages];
+  const entries = pi.entries.length;
+  await pi.command("chain");
+  expect(pi.entries.slice(entries)).toEqual([{
+    customType: "idiom-card",
+    data: { title: "📜 接龙链", lines: ["1. 你：心想事成（+2）", "2. Bot：成竹在胸（+2）"] },
+  }]);
+  expect(llm.calls).toHaveLength(calls);
+  expect(pi.userMessages).toEqual(messages);
+});
+
+test("/help 自动列出 /chain", async () => {
+  await pi.command("help");
+  expect(pi.cards().at(-1)!.join("\n")).toContain("/chain — 查看完整接龙链");
+});
+
+for (const command of ["undo", "restart"]) {
+  test(`/chain 在 /${command} 后只显示当前链`, async () => {
+    await pi.input("心想事成");
+    await pi.submit("成竹在胸");
+    await pi.command("chain");
+    expect(pi.cards().at(-1)).toHaveLength(2);
+    await pi.command(command);
+    await pi.command("chain");
+    expect(pi.cards().at(-1)).toEqual(["还没有成语"]);
+  });
+}
+
+test("/chain 无 UI 时仍追加卡片，0 token 且不发送模型消息", async () => {
+  Object.assign(pi.ctx, { hasUI: false });
+  await pi.command("chain");
+  expect(pi.entries).toEqual([{
+    customType: "idiom-card", data: { title: "📜 接龙链", lines: ["还没有成语"] },
+  }]);
+  expect(llm.calls).toEqual([]);
+  expect(pi.userMessages).toEqual([]);
 });

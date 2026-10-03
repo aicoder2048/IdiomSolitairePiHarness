@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { IdiomGame } from "../../src/engine/game.ts";
-import { boardLines, helpLines, statusLines } from "../../src/extension/view.ts";
+import { boardLines, chainLines, helpLines, statusLines } from "../../src/extension/view.ts";
 import { FakeClock, FakeLLM } from "../fakes.ts";
 
 function make(timerSeconds = 30) {
@@ -57,7 +57,63 @@ test("状态面板含难度配置与用量", () => {
 
 test("帮助列出全部命令", () => {
   const text = helpLines().join("\n");
-  for (const name of ["/hint", "/pass", "/undo", "/difficulty", "/rounds", "/timer", "/restart", "/status"]) {
+  for (const name of ["/hint", "/pass", "/undo", "/difficulty", "/rounds", "/timer", "/restart", "/status", "/chain"]) {
     expect(text).toContain(name);
   }
+});
+
+
+test("接龙链：空链提示", () => {
+  expect(chainLines(make().game)).toEqual(["还没有成语"]);
+});
+
+test("接龙链：包含待 Bot 接龙的人类出词，完成后按顺序显示双方", async () => {
+  const { game } = make();
+  await game.submitHuman("心想事成");
+  expect(game.awaitingBot).toBe(true);
+  expect(game.roundLog).toEqual([]);
+  expect(chainLines(game)).toEqual(["1. 你：心想事成（+2）"]);
+  await game.submitBot("成竹在胸");
+  expect(chainLines(game)).toEqual(["1. 你：心想事成（+2）", "2. Bot：成竹在胸（+2）"]);
+});
+
+test("接龙链：完整历史超过仪表盘和模型视野，角色取自节点", () => {
+  const { game } = make();
+  const idioms = ["心想事成", "成竹在胸", "胸有成竹", "竹报平安", "安居乐业", "业精于勤",
+    "勤能补拙", "拙嘴笨舌", "舌战群儒", "儒雅风流", "流连忘返", "返老还童"];
+  idioms.forEach((idiom, i) => game.chain.addTurn(i < 3 ? "bot" : "human", idiom, 2));
+  expect(chainLines(game)).toEqual(idioms.map((idiom, i) => `${i + 1}. ${i < 3 ? "Bot" : "你"}：${idiom}（+2）`));
+});
+
+test("接龙链：步分始终带符号", () => {
+  const { game } = make();
+  // 负数与零是展示边界 fixture，不改变合法成语的计分规则。
+  game.chain.addTurn("human", "心想事成", 4);
+  game.chain.addTurn("bot", "成竹在胸", -1);
+  game.chain.addTurn("human", "胸有成竹", 0);
+  expect(chainLines(game)).toEqual(["1. 你：心想事成（+4）", "2. Bot：成竹在胸（-1）", "3. 你：胸有成竹（+0）"]);
+});
+
+test("接龙链：切换难度不重算历史步分", async () => {
+  const { game } = make();
+  game.setMode("easy");
+  await game.submitHuman("心想事成");
+  await game.submitBot("成竹在胸");
+  game.setMode("normal");
+  expect(chainLines(game)).toEqual(["1. 你：心想事成（+4）", "2. Bot：成竹在胸（+2）"]);
+});
+
+test("接龙链：纯展示不改动链或对局状态", async () => {
+  const { game } = make();
+  await game.submitHuman("心想事成");
+  const snapshot = () => structuredClone({
+    turns: game.chain.turns, scores: game.scores, roundLog: game.roundLog,
+    currentRound: game.currentRound, lastChar: game.lastChar, mode: game.mode,
+    awaitingBot: game.awaitingBot, pendingAttempts: game.pendingAttempts,
+    gameOver: game.gameOver, secondsLeft: game.secondsLeft(),
+  });
+  const before = snapshot();
+  const lines = chainLines(game);
+  expect(chainLines(game)).toEqual(lines);
+  expect(snapshot()).toEqual(before);
 });

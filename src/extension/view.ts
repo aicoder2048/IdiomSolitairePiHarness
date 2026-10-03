@@ -13,6 +13,7 @@ export const COMMANDS: Record<string, [args: string, description: string]> = {
   timer: ["<秒>", "设置每轮倒计时，0 为关闭"],
   restart: ["[首字]", "重新开局"],
   status: ["", "详细状态面板"],
+  chain: ["", "查看完整接龙链"],
   help: ["", "查看命令与规则"],
 };
 
@@ -98,6 +99,14 @@ export function statusLines(game: IdiomGame, usage?: UsageTotals): string[] {
     lines.push(`裁判/提示调用：${usage.calls} 次 · 输入 ${usage.input} · 输出 ${usage.output} tokens · $${usage.cost.toFixed(4)}`);
   }
   return lines;
+}
+
+/** 完整接龙链：只展示已记账的节点与步分，不截断或重新计分。 */
+export function chainLines(game: IdiomGame): string[] {
+  if (game.chain.turns.length === 0) return ["还没有成语"];
+  return game.chain.turns.map((turn, i) =>
+    `${i + 1}. ${turn.player === "human" ? "你" : "Bot"}：${turn.idiom}（${turn.score >= 0 ? "+" : ""}${turn.score}）`
+  );
 }
 
 export function helpLines(): string[] {
