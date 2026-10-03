@@ -10,7 +10,7 @@ defaults:
   fallback_model: deepseek/deepseek-flash
   idle_timeout_s: 600
   harness_engineering:             # pi extensions loaded into the harness (-e); pi runs with --no-extensions
-    - adws/adw_data/harness_engineering/dev_guard.ts   # secrets + live paper account off-limits; OPT_HOME + OPT_STATE/TRACE/BOOK_STATE sandboxed
+    - adws/adw_data/harness_engineering/dev_guard.ts   # secrets/credentials off-limits; gh and history-moving git are code's job
   # Roster-wide allowlist; any agent may override with its own list.
   # NOTE: --tools filters extension and custom tools too, not just builtins. An agent
   # whose harness_engineering extension registers a tool MUST name that tool in its own

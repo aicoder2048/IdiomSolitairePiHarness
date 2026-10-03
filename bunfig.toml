@@ -1,0 +1,3 @@
+[test]
+# 只跑游戏的测试；工厂的测试（adws/tests、tests/test_autoqueue.py）由 just test-adws / test-autoqueue 跑
+root = "tests"

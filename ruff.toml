@@ -1,0 +1,8 @@
+# 只管工厂的 Python（adws/、scripts/、tests/test_autoqueue.py）；游戏本体是 TypeScript，由 tsc 把关
+line-length = 120
+extend-exclude = ["docs", "*.md", ".claude", "node_modules"]
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+# 中文字符按双宽计算，长消息串会误报 E501；代码布局由 ruff format（120 列）保证
+ignore = ["E501"]
