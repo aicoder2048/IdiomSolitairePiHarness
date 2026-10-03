@@ -11,7 +11,7 @@ default the gh user running the queue), because an issue body becomes a prompt.
 `feedback` is the second lane. GitHub does not let the operator request changes on a PR
 their own account opened, so a human reviews as usual and labels the PR `factory:revise`:
 
-    PR factory:revise -> issue factory:revising -> factory:pr-open      (just pr-feedback pushed and replied)
+    PR factory:revise -> issue factory:revising -> factory:pr-open      (main merged in, just pr-feedback pushed and replied)
                                                 -> factory:needs-human  (worktree and branch kept)
 """
 
@@ -318,7 +318,7 @@ def process_feedback(root, pr):
         return False
 
     claimed = mutation(root, ["gh", "pr", "edit", number, "--remove-label", REVISE]) and mutation(
-        root, [*issue_edit, "--add-label", REVISING, "--remove-label", DONE]
+        root, [*issue_edit, "--add-label", REVISING, "--remove-label", DONE, "--remove-label", FAILED]
     )
     if not claimed:
         print(f"PR #{number}: FAILED claim; no work started")
@@ -331,6 +331,9 @@ def process_feedback(root, pr):
         f"pr-{number}",
         [
             ("git worktree add", ["git", "worktree", "add", "-b", branch, relative, f"origin/{branch}"], root),
+            # The factory that revises is main's, not the one the branch was cut with (PR #2 predated
+            # pr-feedback itself). Like GitHub's "Update branch"; a conflict stops here for a human.
+            ("git merge origin/main", ["git", "merge", "--no-edit", "origin/main"], path),
             ("bun install", ["bun", "install", "--frozen-lockfile"], path),
             ("just pr-feedback", ["just", "pr-feedback", number], path),
         ],

@@ -589,14 +589,29 @@ def test_feedback_success_claims_revises_in_the_prs_branch_and_cleans_up(harness
     assert result.returncode == 0, result.stderr
     assert pr_mutations(h) == [
         ["pr", "edit", "5", "--remove-label", "factory:revise"],
-        ["issue", "edit", "1", "--add-label", "factory:revising", "--remove-label", "factory:pr-open"],
+        [
+            "issue",
+            "edit",
+            "1",
+            "--add-label",
+            "factory:revising",
+            "--remove-label",
+            "factory:pr-open",
+            "--remove-label",
+            "factory:needs-human",
+        ],
         ["issue", "edit", "1", "--remove-label", "factory:revising", "--add-label", "factory:pr-open"],
     ]
     just = [(c["args"], c["cwd"]) for c in h.calls("just")]
     tree = str(h.root / ".autoqueue/worktrees/pr-5")
     assert just == [(["pr-feedback", "5", "--check"], str(h.root)), (["pr-feedback", "5"], tree)]
     work = h.calls("just")[-1]
-    assert work["branch"] == "factory/issue-1" and work["head"] == pr_branch
+    assert work["branch"] == "factory/issue-1"
+    # main was merged into the PR branch before the factory ran, so the factory is main's
+    assert ["merge", "--no-edit", "origin/main"] in [c["args"] for c in h.calls("git")]
+    h.git("merge-base", "--is-ancestor", "origin/main", work["head"])  # raises if main is not in
+    h.git("merge-base", "--is-ancestor", pr_branch, work["head"])
+    assert not work["local_only"]  # unpushed local commits never reach the worker
     assert not (h.root / ".autoqueue/worktrees/pr-5").exists()
     assert "factory/issue-1" not in h.git("branch", "--list")
     assert "PR #5: OK" in result.stdout
@@ -623,6 +638,7 @@ def test_feedback_failure_keeps_the_worktree_and_comments_on_the_pr(harness, pr_
     assert (tree / "recovery.txt").exists() and "factory/issue-1" in h.git("branch", "--list")
     muts = pr_mutations(h)
     assert muts[2] == ["issue", "edit", "1", "--remove-label", "factory:revising", "--add-label", "factory:needs-human"]
+    assert muts[1][-1] == "factory:needs-human"  # the claim clears an earlier failure
     body = muts[3][-1]
     assert muts[3][:3] == ["pr", "comment", "5"]
     assert body.startswith("<!-- factory -->") and "factory:revise" in body and str(tree) in body
@@ -633,3 +649,25 @@ def test_feedback_failure_keeps_the_worktree_and_comments_on_the_pr(harness, pr_
 def test_the_factory_marker_matches_the_feedback_adw():
     adw = (ROOT / "adws/adw_pr_feedback.py").read_text(encoding="utf-8")
     assert 'FACTORY_MARK = "<!-- factory -->"' in adw
+
+
+def test_feedback_merges_main_first_and_a_conflict_stops_before_the_factory(harness, pr_branch):
+    h = harness
+    # main and the PR branch both change the same file differently
+    h.git("checkout", "-q", "-b", "tmp", "origin/factory/issue-1")
+    (h.root / "shared.txt").write_text("branch\n")
+    h.git("add", "shared.txt")
+    h.git("commit", "-q", "-m", "branch side")
+    h.git("push", "-q", "origin", "HEAD:factory/issue-1")
+    h.git("checkout", "-q", "main")
+    h.git("branch", "-D", "tmp")
+    (h.root / "shared.txt").write_text("main\n")
+    h.git("add", "shared.txt")
+    h.git("commit", "-q", "-m", "main side")
+    h.git("push", "-q", "origin", "main")
+    h.config["revise_prs"] = [revise_pr()]
+    result = h.run("feedback")
+    assert result.returncode == 1
+    assert "FAILED git merge origin/main" in result.stdout
+    assert [c["args"] for c in h.calls("just")] == [["pr-feedback", "5", "--check"]]
+    assert "factory:needs-human" in pr_mutations(h)[2]
