@@ -19,7 +19,7 @@
 **Goal**: `src/engine/`：规则、Prompt、Verifier、Context、对局状态机（快照、计分、倒计时、命令）
 **Success Criteria**: 从 Python 版平移的离线测试全部通过；`tsc --noEmit` 无错误
 **Tests**: rules / prompts / verifier / context / game（回合两段式：人类入账 → Bot 提交 → 结算）
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 3: 最小可玩的 Pi extension
 **Goal**: `src/extension/`：`input` 拦截、`submit_idiom` 工具、`context` 裁剪、`before_agent_start` 系统提示、斜杠命令、简版 widget；`just play` 启动
