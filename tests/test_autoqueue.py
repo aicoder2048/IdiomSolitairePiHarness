@@ -43,10 +43,7 @@ if name == "git":
     sys.exit(subprocess.call([os.environ["FAKE_GIT"], *args]))
 if name == "gh":
     if args[:2] == ["issue", "list"]:
-        if args[args.index("--state") + 1] == "closed":
-            print(config.get("raw_closed_issues", json.dumps(config.get("closed_issues", []))))
-        else:
-            print(config.get("raw_issues", json.dumps(config["issues"])))
+        print(config.get("raw_issues", json.dumps(config["issues"])))
     elif args[:2] == ["pr", "list"] and "--label" in args:
         print(json.dumps(config.get("revise_prs", [])))
     elif args[:2] == ["pr", "list"]:
@@ -169,134 +166,6 @@ def gh_mutations(h):
 
 def comments(h):
     return [args[-1] for args in gh_mutations(h) if args[1] == "comment"]
-
-
-def test_closed_done_cleanup_before_queue_under_lock(harness):
-    h = harness
-    h.config["closed_issues"] = [{"number": 20}, {"number": 2}]
-    result = h.run()
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines()[:2] == [
-        "cleared factory:pr-open from closed #2",
-        "cleared factory:pr-open from closed #20",
-    ]
-    assert "#13: OK" in result.stdout
-    calls = h.calls()
-    assert [(c["name"], c["args"]) for c in calls[:5]] == [
-        ("git", ["fetch", "origin"]),
-        (
-            "gh",
-            [
-                "issue",
-                "list",
-                "--state",
-                "closed",
-                "--label",
-                "factory:pr-open",
-                "--json",
-                "number",
-                "--limit",
-                "10000",
-            ],
-        ),
-        ("gh", ["issue", "edit", "2", "--remove-label", "factory:pr-open"]),
-        ("gh", ["issue", "edit", "20", "--remove-label", "factory:pr-open"]),
-        (
-            "gh",
-            [
-                "issue",
-                "list",
-                "--state",
-                "open",
-                "--label",
-                "factory:queued",
-                "--json",
-                "number,title,labels,assignees,author",
-                "--limit",
-                "10000",
-            ],
-        ),
-    ]
-    assert all(c["lock"] == str(c["parent_pid"]) for c in calls[:5])
-    assert gh_mutations(h)[:2] == [["issue", "edit", str(n), "--remove-label", "factory:pr-open"] for n in (2, 20)]
-    assert all(args[:3] == ["issue", "edit", "13"] for args in gh_mutations(h)[2:])
-    assert [c["args"] for c in h.calls("just")] == [["issue", "13"]]
-
-
-def test_closed_done_dry_run_only_previews(harness):
-    h = harness
-    h.config["closed_issues"] = [{"number": 20}, {"number": 2}]
-    result = h.run("--dry-run")
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == [
-        "would clear factory:pr-open from closed #2",
-        "would clear factory:pr-open from closed #20",
-        "would pick #13: Issue 13",
-    ]
-    assert gh_mutations(h) == [] and h.calls("just") == [] and h.calls("bun") == []
-
-
-def test_closed_done_query_failure_does_not_block_queue(harness):
-    h = harness
-    h.config["reject"] = [["gh", "issue", "list", "--state", "closed"]]
-    result = h.run()
-    assert result.returncode == 0, result.stderr
-    assert len(result.stderr.splitlines()) == 1
-    assert "closed-issue cleanup skipped" in result.stderr and "synthetic refusal" in result.stderr
-    assert "#13: OK" in result.stdout and "cleared" not in result.stdout
-    assert all(args[:3] == ["issue", "edit", "13"] for args in gh_mutations(h))
-    assert [c["args"] for c in h.calls("just")] == [["issue", "13"]]
-
-
-@pytest.mark.parametrize(
-    "raw",
-    [
-        "not JSON",
-        "{}",
-        "[1]",
-        '[{"number": 2}, {}]',
-        *[json.dumps([{"number": 2}, {"number": n}]) for n in (None, True, "3", 0, -1, 1.5)],
-        json.dumps([{"number": n + 1} for n in range(10000)]),
-    ],
-    ids=["json", "list", "object", "missing", "null", "bool", "string", "zero", "negative", "float", "ceiling"],
-)
-def test_closed_done_malformed_list_does_not_block_queue(harness, raw):
-    h = harness
-    h.config["raw_closed_issues"] = raw
-    result = h.run()
-    assert result.returncode == 0, result.stderr
-    assert len(result.stderr.splitlines()) == 1
-    assert "closed-issue cleanup skipped" in result.stderr and "Traceback" not in result.stderr
-    assert "#13: OK" in result.stdout and "cleared" not in result.stdout
-    assert all(args[:3] == ["issue", "edit", "13"] for args in gh_mutations(h))
-    assert [c["args"] for c in h.calls("just")] == [["issue", "13"]]
-
-
-@pytest.mark.parametrize("code", [0, 1])
-def test_closed_done_edit_failure_continues_and_preserves_queue_exit(harness, code):
-    h = harness
-    h.config.update(
-        closed_issues=[{"number": 20}, {"number": 2}],
-        reject=[["gh", "issue", "edit", "2"]],
-        codes={"13": code},
-    )
-    result = h.run()
-    assert result.returncode == code, result.stderr
-    assert len(result.stderr.splitlines()) == 1 and "synthetic refusal" in result.stderr
-    assert "cleared factory:pr-open from closed #2\n" not in result.stdout
-    assert "cleared factory:pr-open from closed #20\n" in result.stdout
-    assert gh_mutations(h)[:2] == [["issue", "edit", str(n), "--remove-label", "factory:pr-open"] for n in (2, 20)]
-    assert [c["args"] for c in h.calls("just")] == [["issue", "13"]]
-    assert ("#13: OK" if code == 0 else "#13: FAILED") in result.stdout
-
-
-def test_closed_done_cleanup_not_in_feedback(harness):
-    h = harness
-    h.config["closed_issues"] = [{"number": 2}]
-    result = h.run("feedback", "--dry-run")
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "" and gh_mutations(h) == []
-    assert [c["args"][:2] for c in h.calls("gh")] == [["pr", "list"]]
 
 
 def test_dry_run_sorted_fetch_only(harness):
@@ -521,7 +390,7 @@ def test_live_nonholding_pid_is_reclaimed(harness):
     assert result.returncode == 0, result.stderr
     assert "would pick #13" in result.stdout
     assert "held by pid" not in result.stdout
-    assert [call["args"][:2] for call in h.calls("gh")] == [["issue", "list"], ["issue", "list"], ["pr", "list"]]
+    assert [call["args"][:2] for call in h.calls("gh")] == [["issue", "list"], ["pr", "list"]]
     assert gh_mutations(h) == []
     for call in h.calls("gh"):
         assert call["lock"] == str(call["parent_pid"])
