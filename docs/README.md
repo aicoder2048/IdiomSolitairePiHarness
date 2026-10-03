@@ -13,7 +13,9 @@
 
 ## 目录
 
-- `factory-labels.md`：软件工厂怎么通过 GitHub issue、PR 和标签接活、交付、返工（操作步骤与设计理由）。
+- `study-notes/`：学习笔记，文件名为「内容-时间戳」。
+  - `factory-labels-guide-20261003-1605.md`：软件工厂怎么通过 GitHub issue、PR 和标签接活、交付、返工（操作步骤与设计理由）。
+  - `just-autoqueue-walkthrough-20261003-1601.md`：`just autoqueue` 对一个 issue 做了什么（四步流程）。
 - `pi-docs/official-docs/`：官方文档镜像，共 40 页，按 `docs.json` 导航分为 5 组，索引见其中的 `README.md`。
 - `pi-docs/llm/pi-docs-combined.md`：把上面 40 页合并成一个文件，方便上传给 NotebookLM 或喂给 LLM。
 - `pi-docs/llm/pi-extension-tutorial.md`：Extension 入门教程（中文），2026-10-03 已对照新文档核对过。
