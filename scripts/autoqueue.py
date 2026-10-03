@@ -104,6 +104,23 @@ def listing(root, args):
     return data
 
 
+def clear_closed_done(root, dry_run):
+    """Best-effort cleanup; stale completion labels must not block the queue."""
+    try:
+        issues = listing(root, ["gh", "issue", "list", "--state", "closed", "--label", DONE, "--json", "number"])
+        numbers = [issue["number"] for issue in issues]
+        if any(type(number) is not int or number <= 0 for number in numbers):
+            raise ValueError("Malformed closed GitHub issue number")
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+        diagnostic(f"autoqueue: closed-issue cleanup skipped: {exc}")
+        return
+    for number in sorted(numbers):
+        if dry_run:
+            print(f"would clear {DONE} from closed #{number}")
+        elif mutation(root, ["gh", "issue", "edit", str(number), "--remove-label", DONE]):
+            print(f"cleared {DONE} from closed #{number}")
+
+
 def allowed_authors(root):
     """Who may feed the factory: FACTORY_AUTHORS, else the gh user running the queue."""
     configured = os.environ.get("FACTORY_AUTHORS", "")
@@ -419,6 +436,7 @@ def main(argv=None):
                     elif not process_feedback(ROOT, pr):
                         failed = True
                 return int(failed)
+            clear_closed_done(ROOT, args.dry_run)
             for issue in candidates(ROOT, args.max):
                 if args.dry_run:
                     print(f"would pick #{issue['number']}: {issue['title']}")
