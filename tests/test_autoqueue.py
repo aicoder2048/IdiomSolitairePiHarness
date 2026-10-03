@@ -44,6 +44,8 @@ if name == "git":
 if name == "gh":
     if args[:2] == ["issue", "list"]:
         print(config.get("raw_issues", json.dumps(config["issues"])))
+    elif args[:2] == ["pr", "list"] and "--label" in args:
+        print(json.dumps(config.get("revise_prs", [])))
     elif args[:2] == ["pr", "list"]:
         print(config.get("raw_prs", json.dumps(config.get("prs", []))))
     elif args[:2] == ["api", "user"]:
@@ -56,6 +58,8 @@ elif name == "bun":
 elif name == "just":
     record_input = sys.stdin.read()
     assert record_input == ""
+    if args[-1:] == ["--check"]:
+        sys.exit(config.get("check_code", 0))
     if args == ["autoqueue"]:
         print("cron fake just")
         sys.exit(0)
@@ -545,3 +549,87 @@ def test_allowed_author_defaults_to_the_gh_user(harness):
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["would pick #13: Issue 13"]
     assert ["api", "user", "--jq", ".login"] in [c["args"] for c in h.calls("gh")]
+
+
+# ---------- feedback lane: PRs labelled factory:revise ----------
+
+
+def revise_pr(number=5, branch="factory/issue-1"):
+    return dict(number=number, title=f"PR {number}", headRefName=branch)
+
+
+@pytest.fixture
+def pr_branch(harness):
+    """origin has the factory branch for issue 1, the local clone does not (autoqueue deleted it after the PR)."""
+    h = harness
+    h.git("branch", "factory/issue-1", h.base)
+    h.git("push", "origin", "factory/issue-1")
+    h.git("branch", "-D", "factory/issue-1")
+    return h.git("rev-parse", "origin/factory/issue-1")
+
+
+def pr_mutations(h):
+    return [c["args"] for c in h.calls("gh") if c["args"][:2] in (["pr", "edit"], ["pr", "comment"], ["issue", "edit"])]
+
+
+def test_feedback_dry_run_lists_factory_prs_only(harness):
+    h = harness
+    h.config["revise_prs"] = [revise_pr(9, "someone/else"), revise_pr(5)]
+    result = h.run("feedback", "--dry-run", "--max", "5")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["would revise PR #5: PR 5"]
+    assert "skip PR #9: branch someone/else is not a factory branch" in result.stderr
+    assert pr_mutations(h) == [] and h.calls("just") == []
+
+
+def test_feedback_success_claims_revises_in_the_prs_branch_and_cleans_up(harness, pr_branch):
+    h = harness
+    h.config["revise_prs"] = [revise_pr()]
+    result = h.run("feedback")
+    assert result.returncode == 0, result.stderr
+    assert pr_mutations(h) == [
+        ["pr", "edit", "5", "--remove-label", "factory:revise"],
+        ["issue", "edit", "1", "--add-label", "factory:revising", "--remove-label", "factory:pr-open"],
+        ["issue", "edit", "1", "--remove-label", "factory:revising", "--add-label", "factory:pr-open"],
+    ]
+    just = [(c["args"], c["cwd"]) for c in h.calls("just")]
+    tree = str(h.root / ".autoqueue/worktrees/pr-5")
+    assert just == [(["pr-feedback", "5", "--check"], str(h.root)), (["pr-feedback", "5"], tree)]
+    work = h.calls("just")[-1]
+    assert work["branch"] == "factory/issue-1" and work["head"] == pr_branch
+    assert not (h.root / ".autoqueue/worktrees/pr-5").exists()
+    assert "factory/issue-1" not in h.git("branch", "--list")
+    assert "PR #5: OK" in result.stdout
+
+
+def test_feedback_with_nothing_new_drops_the_label_and_says_so(harness, pr_branch):
+    h = harness
+    h.config.update(revise_prs=[revise_pr()], check_code=3)
+    result = h.run("feedback")
+    assert result.returncode == 0, result.stderr
+    muts = pr_mutations(h)
+    assert muts[0] == ["pr", "edit", "5", "--remove-label", "factory:revise"]
+    assert muts[1][:3] == ["pr", "comment", "5"] and "<!-- factory -->" in muts[1][-1]
+    assert len(muts) == 2 and [c["args"] for c in h.calls("just")] == [["pr-feedback", "5", "--check"]]
+    assert not (h.root / ".autoqueue/worktrees").exists()
+
+
+def test_feedback_failure_keeps_the_worktree_and_comments_on_the_pr(harness, pr_branch):
+    h = harness
+    h.config.update(revise_prs=[revise_pr()], codes={"5": 1})
+    result = h.run("feedback")
+    assert result.returncode == 1
+    tree = h.root / ".autoqueue/worktrees/pr-5"
+    assert (tree / "recovery.txt").exists() and "factory/issue-1" in h.git("branch", "--list")
+    muts = pr_mutations(h)
+    assert muts[2] == ["issue", "edit", "1", "--remove-label", "factory:revising", "--add-label", "factory:needs-human"]
+    body = muts[3][-1]
+    assert muts[3][:3] == ["pr", "comment", "5"]
+    assert body.startswith("<!-- factory -->") and "factory:revise" in body and str(tree) in body
+    again = h.run("feedback")
+    assert again.returncode == 0 and "skip PR #5: leftover worktree" in again.stderr
+
+
+def test_the_factory_marker_matches_the_feedback_adw():
+    adw = (ROOT / "adws/adw_pr_feedback.py").read_text(encoding="utf-8")
+    assert 'FACTORY_MARK = "<!-- factory -->"' in adw

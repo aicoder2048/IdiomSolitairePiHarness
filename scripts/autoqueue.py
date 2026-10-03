@@ -7,6 +7,12 @@ default the gh user running the queue), because an issue body becomes a prompt.
 
     factory:queued -> factory:running -> factory:pr-open      (just issue opened the PR)
                                       -> factory:needs-human  (worktree and branch kept; never retried)
+
+`feedback` is the second lane. GitHub does not let the operator request changes on a PR
+their own account opened, so a human reviews as usual and labels the PR `factory:revise`:
+
+    PR factory:revise -> issue factory:revising -> factory:pr-open      (just pr-feedback pushed and replied)
+                                                -> factory:needs-human  (worktree and branch kept)
 """
 
 import argparse
@@ -30,6 +36,12 @@ RUNNING = "factory:running"
 DONE = "factory:pr-open"
 FAILED = "factory:needs-human"
 BRANCH = "factory/issue-{number}"
+REVISE = "factory:revise"  # on a PR: a human asks the factory to address its review comments
+REVISING = "factory:revising"
+FACTORY_BRANCH = re.compile(r"factory/issue-(\d+)")
+# Same marker as adws/adw_pr_feedback.py: comments carrying it are never read back as feedback.
+FACTORY_MARK = "<!-- factory -->"
+NOTHING_TO_ADDRESS = 3  # `just pr-feedback N --check` exit code
 CLOSING = re.compile(r"\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)\b", re.IGNORECASE)
 
 
@@ -177,20 +189,41 @@ def tee(args, cwd, log, tail):
         return 127
 
 
-def failure_comment(path, branch, stage, code, tail, include_tail):
+def failure_comment(path, branch, stage, code, tail, include_tail, retry=READY):
     body = (
         f"Autoqueue failed at {stage} (exit {code}).\n\n"
         f"Preserved worktree (intended path; may not exist if setup failed): {path}\n\n"
         "Human recovery: open this worktree and follow the factory progress comment's recovery command. "
         "Or deliberately discard the failed worktree AND local branch "
-        f"`{branch}`, then re-add `{READY}` to retry. "
-        f"The runner never retries automatically; a leftover worktree will be skipped even with `{READY}`."
+        f"`{branch}`, then re-add `{retry}` to retry. "
+        f"The runner never retries automatically; a leftover worktree will be skipped even with `{retry}`."
     )
     if include_tail:
         text = "".join(tail)
         fence = "`" * max(3, 1 + max((len(s) for s in re.findall(r"`+", text)), default=0))
         body += f"\n\nLast log lines:\n{fence}text\n{text}\n{fence}"
     return body
+
+
+def run_stages(root, name, stages):
+    """Run (stage, argv, cwd) in order into one log; stop at the first failure. Returns (stage, code, tail, log)."""
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    log_path = root / f".autoqueue/logs/{name}-{stamp}.log"
+    tail = deque(maxlen=20)
+    stage, code = "log setup", 127
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("w", encoding="utf-8") as log:
+            for next_stage, args, cwd in stages:
+                stage = next_stage
+                code = tee(args, cwd, log, tail)
+                if code:
+                    break
+    except OSError as exc:
+        code = 127
+        tail.append(f"{stage}: {exc}\n")
+        diagnostic(tail[-1].strip())
+    return stage, code, tail, log_path
 
 
 def process_issue(root, issue):
@@ -206,26 +239,15 @@ def process_issue(root, issue):
     relative = f".autoqueue/worktrees/issue-{number}"
     path = root / relative
     branch = BRANCH.format(number=number)
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    log_path = root / f".autoqueue/logs/issue-{number}-{stamp}.log"
-    tail = deque(maxlen=20)
-    stage, code = "log setup", 127
-    try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("w", encoding="utf-8") as log:
-            for next_stage, args, cwd in [
-                ("git worktree add", ["git", "worktree", "add", "-b", branch, relative, "origin/main"], root),
-                ("bun install", ["bun", "install", "--frozen-lockfile"], path),
-                ("just issue", ["just", "issue", number], path),
-            ]:
-                stage = next_stage
-                code = tee(args, cwd, log, tail)
-                if code:
-                    break
-    except OSError as exc:
-        code = 127
-        tail.append(f"{stage}: {exc}\n")
-        diagnostic(tail[-1].strip())
+    stage, code, tail, log_path = run_stages(
+        root,
+        f"issue-{number}",
+        [
+            ("git worktree add", ["git", "worktree", "add", "-b", branch, relative, "origin/main"], root),
+            ("bun install", ["bun", "install", "--frozen-lockfile"], path),
+            ("just issue", ["just", "issue", number], path),
+        ],
+    )
 
     if code == 0:
         finalized = mutation(root, [*edit, "--remove-label", RUNNING, "--add-label", DONE])
@@ -243,6 +265,92 @@ def process_issue(root, issue):
     comment_ok = mutation(root, ["gh", "issue", "comment", number, "--body", comment])
     suffix = "" if labels_ok and comment_ok else "; finalization FAILED"
     print(f"#{number}: FAILED {stage} exit {code}; log {log_path}; kept worktree {path}{suffix}")
+    return False
+
+
+def feedback_candidates(root, maximum):
+    prs = listing(
+        root, ["gh", "pr", "list", "--state", "open", "--label", REVISE, "--json", "number,title,headRefName"]
+    )
+    for pr in prs:
+        if type(pr["number"]) is not int or pr["number"] <= 0 or not isinstance(pr["headRefName"], str):
+            raise ValueError("Malformed GitHub pull request")
+    trees = capture(root, ["git", "worktree", "list", "--porcelain", "-z"])
+    registered = {entry.removeprefix("worktree ") for entry in trees.split("\0") if entry.startswith("worktree ")}
+    selected = []
+    for pr in sorted(prs, key=lambda item: item["number"]):
+        number = pr["number"]
+        path = root / f".autoqueue/worktrees/pr-{number}"
+        if not FACTORY_BRANCH.fullmatch(pr["headRefName"]):
+            reason = f"branch {pr['headRefName']} is not a factory branch"
+        elif os.path.lexists(path) or str(path) in registered:
+            reason = f"leftover worktree {path}"
+        elif len(selected) >= maximum:
+            reason = "deferred by --max"
+        else:
+            selected.append(pr)
+            continue
+        diagnostic(f"skip PR #{number}: {reason}")
+    return selected
+
+
+def process_feedback(root, pr):
+    number = str(pr["number"])
+    branch = pr["headRefName"]
+    issue = FACTORY_BRANCH.fullmatch(branch).group(1)
+    pr_comment = ["gh", "pr", "comment", number, "--body"]
+    issue_edit = ["gh", "issue", "edit", issue]
+
+    # Ask before building anything: a label with no new comments behind it is a no-op, said out loud.
+    check = subprocess.run(
+        ["just", "pr-feedback", number, "--check"], cwd=root, stdin=subprocess.DEVNULL, capture_output=True, text=True
+    )
+    if check.returncode == NOTHING_TO_ADDRESS:
+        done = mutation(root, ["gh", "pr", "edit", number, "--remove-label", REVISE]) and mutation(
+            root,
+            [*pr_comment, f"{FACTORY_MARK}\n没有找到工厂上次回复之后的新意见，已撤下 `{REVISE}`。先留言，再打标签。"],
+        )
+        print(f"PR #{number}: nothing to address{'' if done else '; finalization FAILED'}")
+        return done
+    if check.returncode:
+        diagnostic(check.stderr.strip() or check.stdout.strip())
+        print(f"PR #{number}: FAILED check exit {check.returncode}; no work started")
+        return False
+
+    claimed = mutation(root, ["gh", "pr", "edit", number, "--remove-label", REVISE]) and mutation(
+        root, [*issue_edit, "--add-label", REVISING, "--remove-label", DONE]
+    )
+    if not claimed:
+        print(f"PR #{number}: FAILED claim; no work started")
+        return False
+
+    relative = f".autoqueue/worktrees/pr-{number}"
+    path = root / relative
+    stage, code, tail, log_path = run_stages(
+        root,
+        f"pr-{number}",
+        [
+            ("git worktree add", ["git", "worktree", "add", "-b", branch, relative, f"origin/{branch}"], root),
+            ("bun install", ["bun", "install", "--frozen-lockfile"], path),
+            ("just pr-feedback", ["just", "pr-feedback", number], path),
+        ],
+    )
+
+    if code == 0:
+        finalized = mutation(root, [*issue_edit, "--remove-label", REVISING, "--add-label", DONE])
+        if finalized:
+            finalized = mutation(root, ["git", "worktree", "remove", "--force", str(path)])
+        if finalized:
+            finalized = mutation(root, ["git", "branch", "-D", branch])
+        outcome = "OK just pr-feedback exit 0" if finalized else "FAILED finalization (factory succeeded)"
+        print(f"PR #{number}: {outcome}; log {log_path}; worktree {path}")
+        return finalized
+
+    labels_ok = mutation(root, [*issue_edit, "--remove-label", REVISING, "--add-label", FAILED])
+    comment = failure_comment(path, branch, stage, code, tail, not (stage == "just pr-feedback" and code == 1), REVISE)
+    comment_ok = mutation(root, [*pr_comment, f"{FACTORY_MARK}\n{comment}"])
+    suffix = "" if labels_ok and comment_ok else "; finalization FAILED"
+    print(f"PR #{number}: FAILED {stage} exit {code}; log {log_path}; kept worktree {path}{suffix}")
     return False
 
 
@@ -280,6 +388,9 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(description=__doc__)
     cron = bool(argv and argv[0] == "cron")
+    feedback = bool(argv and argv[0] == "feedback")
+    if feedback:
+        argv = argv[1:]
     if cron:
         parser.add_argument("minutes", nargs="?", type=positive, default=30)
         args = parser.parse_args(argv[1:])
@@ -297,9 +408,15 @@ def main(argv=None):
             if not acquired:
                 return 0
             capture(ROOT, ["git", "fetch", "origin"])
-            selected = candidates(ROOT, args.max)
             failed = False
-            for issue in selected:
+            if feedback:
+                for pr in feedback_candidates(ROOT, args.max):
+                    if args.dry_run:
+                        print(f"would revise PR #{pr['number']}: {pr['title']}")
+                    elif not process_feedback(ROOT, pr):
+                        failed = True
+                return int(failed)
+            for issue in candidates(ROOT, args.max):
                 if args.dry_run:
                     print(f"would pick #{issue['number']}: {issue['title']}")
                 elif not process_issue(ROOT, issue):
