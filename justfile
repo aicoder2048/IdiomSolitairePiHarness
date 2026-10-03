@@ -36,6 +36,10 @@ test:
     just test-adws
     just test-autoqueue
 
+# 扩展展示与胶水层测试，离线
+test-extensions:
+    bun test tests/extension
+
 typecheck:
     bunx tsc --noEmit
 

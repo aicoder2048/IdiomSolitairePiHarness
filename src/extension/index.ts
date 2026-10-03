@@ -239,6 +239,7 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     command("timer", (args, ctx) => void report(game.setTimer(args), ctx), ["0", "30", "60", "120"]);
     command("restart", (args, ctx) => void report(game.restart(args), ctx));
     command("status", () => card(view.statusLines(game, piLLM?.totals), "📊 状态"));
+    command("chain", () => card(view.chainLines(game), "📜 接龙链"));
     command("help", () => card(view.helpLines(), "📖 成语接龙"));
   };
 }
