@@ -70,6 +70,16 @@ export function buildObservation(candidate: string, reason: string, attemptsLeft
   return `候选词「${candidate}」无效：${reason}。还剩 ${attemptsLeft} 次机会，请换一个成语再调用 ${SUBMIT_TOOL}。`;
 }
 
+/** 本回合结算后回给 Bot 的工具结果：明确告诉它停下。 */
+export function buildRoundEndMessage(bot: { status: "success" | "failed"; idiom: string }): string {
+  return bot.status === "success"
+    ? `「${bot.idiom}」通过，本轮结束，请停止输出。`
+    : "机会已用完，本轮 Bot 放弃，本轮结束，请停止输出。";
+}
+
+/** Bot 没调用工具就想结束时，追加一次的催促。 */
+export const NUDGE_MESSAGE = `你还没有提交成语。请立即调用 ${SUBMIT_TOOL} 提交一个接龙成语，不要输出其它文字。`;
+
 /** 为人类玩家生成 n 个候选提示。 */
 export function buildHintMessages(targetChar: string, n: number, avoid: readonly string[]): ChatMessage[] {
   const avoidText = avoid.length > 0 ? avoid.join("、") : "无";

@@ -3,6 +3,8 @@ import type { ChatMessage } from "../../src/engine/llm.ts";
 import {
   BOT_SYSTEM_PROMPT,
   buildHintMessages,
+  buildObservation,
+  buildRoundEndMessage,
   buildRoundPrompt,
   buildVerifierMessages,
 } from "../../src/engine/prompts.ts";
@@ -48,6 +50,18 @@ test("回合 prompt 带最近接龙链", () => {
   const prompt = buildRoundPrompt("胸", false, "strict", ["心想事成", "成竹在胸"]);
   expect(prompt).toContain("最近 2 个");
   expect(prompt).toContain("心想事成 → 成竹在胸");
+});
+
+test("结算消息告诉 Bot 停下", () => {
+  expect(buildRoundEndMessage({ status: "success", idiom: "成竹在胸" })).toContain("「成竹在胸」通过");
+  expect(buildRoundEndMessage({ status: "failed", idiom: "" })).toContain("放弃");
+});
+
+test("Observation 带候选、原因与剩余次数", () => {
+  const text = buildObservation("一马当先", "首字「一」接不上「成」", 2);
+  expect(text).toContain("一马当先");
+  expect(text).toContain("接不上");
+  expect(text).toContain("2");
 });
 
 test("提示 prompt 要 n 个候选并避开已用成语", () => {

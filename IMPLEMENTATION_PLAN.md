@@ -25,7 +25,7 @@
 **Goal**: `src/extension/`：`input` 拦截、`submit_idiom` 工具、`context` 裁剪、`before_agent_start` 系统提示、斜杠命令、简版 widget；`just play` 启动
 **Success Criteria**: 能在 Pi TUI 里完整玩一局；斜杠命令 0 token；Bot 失败尝试不进入下一回合的上下文
 **Tests**: 胶水层用假 `ExtensionAPI` 离线测试；一条 live 冒烟（RPC 模式）
-**Status**: Not Started
+**Status**: Complete
 
 ## Stage 4: 移植软件工厂 + Issue 生命周期
 **Goal**: 移植 SSSF（roster 按 `sssf.config.yaml.sample`）、本项目的 `dev_guard.ts`、`quality.py` 接 `just test`；`adw_issue` 加标签状态机（`factory:queued → running → pr-open / needs-human`）
