@@ -2,7 +2,7 @@
 
 > 记录时间：2026-10-03 16:01 PDT
 > 例子：issue #4「autoqueue：每轮开始时清掉已关闭 issue 上残留的 factory:pr-open」，记录时工厂正处在 build 阶段。
-> 相关文档：`docs/factory-labels.md`（标签与操作步骤）、`scripts/autoqueue.py`、`adws/adw_issue.py`
+> 相关文档：`factory-labels-guide-20261003-1605.md`（标签与操作步骤）、`scripts/autoqueue.py`、`adws/adw_issue.py`
 
 ## 一句话
 
