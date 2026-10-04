@@ -108,6 +108,28 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
       pi.appendEntry<CardData>(CARD, { title, lines });
     }
 
+    /** 状态只给玩家看；TUI 按任意键关闭，不追加对话卡片。 */
+    async function presentStatus(lines: string[], ctx: ExtensionContext): Promise<void> {
+      if (ctx.mode !== "tui") {
+        card(lines, "📊 状态");
+        return;
+      }
+      const overlayOptions: OverlayOptions = { anchor: "center", margin: 1 };
+      try {
+        await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+          const content: PanelContent = { title: "📊 状态", lines, footer: "按任意键关闭", theme };
+          overlayOptions.width = panelWidth(content, tui.terminal.columns);
+          overlayOptions.visible = (columns) => {
+            overlayOptions.width = panelWidth(content, columns);
+            return true;
+          };
+          return createDismissiblePanel(content, () => done());
+        }, { overlay: true, overlayOptions });
+      } catch {
+        notify(ctx, "状态面板显示失败，请重新 /status。", "error");
+      }
+    }
+
     /** 结算只给玩家看；不等待按键，以免阻塞 Bot 工具的 terminate。 */
     async function presentFinal(lines: string[], ctx: ExtensionContext): Promise<void> {
       if (ctx.mode !== "tui") {
@@ -345,7 +367,7 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     command("rounds", (args, ctx) => void report(game.setRounds(args), ctx), ["5", "9", "15", "20"]);
     command("timer", (args, ctx) => void report(game.setTimer(args), ctx), ["0", "30", "60", "120"]);
     command("restart", (args, ctx) => void report(game.restart(args), ctx));
-    command("status", () => card(view.statusLines(game, piLLM?.totals), "📊 状态"));
+    command("status", (_args, ctx) => presentStatus(view.statusLines(game, piLLM?.totals), ctx));
     command("chain", () => card(view.chainLines(game), "📜 接龙链"));
     command("help", () => card(view.helpLines(), "📖 成语接龙"));
   };
