@@ -10,7 +10,7 @@ which pi
 # → /opt/homebrew/bin/pi
 
 # 进入你的项目
-cd /Users/szou/Python/Playground/PiAgent/pi-vs-claude-code
+cd path/to/your-project
 ```
 
 ## Level 1: 最小的 Extension
@@ -176,7 +176,7 @@ pi.on("turn_end", async (_event, ctx) => {
 已创建在 `.pi/extensions/hello.ts`，包含上述所有示例。交互式测试：
 
 ```bash
-cd /Users/szou/Python/Playground/PiAgent/pi-vs-claude-code
+cd path/to/your-project
 pi
 ```
 
