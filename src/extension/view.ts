@@ -78,7 +78,14 @@ export function roundCardLines(record: RoundRecord): string[] {
 
 export function finalLines(game: IdiomGame): string[] {
   const verdict = { human: "你赢了！🎉", bot: "Bot 获胜。", draw: "平局。" }[game.winner()];
-  return ["🏁 对局结束", `你 ${game.scores.human} : ${game.scores.bot} Bot · ${verdict}`, "输入 /restart 再来一局，或 /rounds 加轮数继续。"];
+  return [
+    "🏁 对局结束",
+    `你 ${game.scores.human} : ${game.scores.bot} Bot · ${verdict}`,
+    ...game.roundLog.map((record) =>
+      `第 ${record.roundNo} 轮：${describeHumanMove(record.human)} / ${describeBot(record)}` +
+      (record.bot.status === "success" ? "" : `（本轮 ${signed(record.botGained)} 分）`)),
+    "输入 /restart 再来一局，或 /rounds 加轮数继续。",
+  ];
 }
 
 export function statusLines(game: IdiomGame, usage?: UsageTotals): string[] {

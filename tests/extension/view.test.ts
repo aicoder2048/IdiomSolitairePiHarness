@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { IdiomGame } from "../../src/engine/game.ts";
-import { boardLines, chainLines, helpLines, statusLines } from "../../src/extension/view.ts";
+import { boardLines, chainLines, finalLines, helpLines, statusLines } from "../../src/extension/view.ts";
 import { FakeClock, FakeLLM } from "../fakes.ts";
 
 function make(timerSeconds = 30) {
@@ -117,3 +117,57 @@ test("接龙链：纯展示不改动链或对局状态", async () => {
   expect(chainLines(game)).toEqual(lines);
   expect(snapshot()).toEqual(before);
 });
+
+
+test("结算：完整历史含跳过、提示、超时和 Bot 放弃，读取不改变状态或历史分数", async () => {
+  const { game, clock } = make();
+  game.setRounds("4");
+  await game.submitHuman("心想事成");
+  await game.submitBot("成竹在胸");
+  game.pass();
+  game.forfeitBot("回合被中断");
+  await game.submitHint("胸有成竹");
+  await game.submitBot("竹报平安");
+  clock.now += 31;
+  await game.submitHuman("安居乐业");
+  game.forfeitBot("模型调用出错");
+  expect(game.gameOver).toBe(true);
+  const expected = [
+    "🏁 对局结束", "你 2 : 4 Bot · Bot 获胜。",
+    "第 1 轮：你：心想事成（+2） / Bot：成竹在胸（+2）",
+    "第 2 轮：你跳过本轮（-1） / Bot 放弃：回合被中断（本轮 0 分）",
+    "第 3 轮：你：胸有成竹（+2，使用提示） / Bot：竹报平安（+2）",
+    "第 4 轮：超时，按跳过计（-1） / Bot 放弃：模型调用出错（本轮 0 分）",
+    "输入 /restart 再来一局，或 /rounds 加轮数继续。",
+  ];
+  expect(finalLines(game)).toEqual(expected);
+  game.setMode("easy");
+  const snapshot = () => structuredClone({ scores: game.scores, chain: game.chain.turns,
+    log: game.roundLog, round: game.currentRound, hints: game.hintsRemaining,
+    awaitingBot: game.awaitingBot, secondsLeft: game.secondsLeft() });
+  const before = snapshot();
+  expect(finalLines(game)).toEqual(expected);
+  expect(finalLines(game)).toEqual(expected);
+  expect(finalLines(game)).toHaveLength(game.roundLog.length + 3);
+  expect(snapshot()).toEqual(before);
+});
+
+for (const forfeit of [false, true]) {
+  test(`结算：${forfeit ? "人类胜出与无放弃原因" : "平局"}`, async () => {
+    const { game } = make();
+    game.setRounds("1");
+    await game.submitHuman("心想事成");
+    if (forfeit) {
+      game.forfeitBot("test");
+      // 仅用于展示边界：没有尝试记录的失败。
+      game.roundLog[0]!.bot.attempts = [];
+    } else await game.submitBot("成竹在胸");
+    expect(finalLines(game)).toEqual([
+      "🏁 对局结束",
+      forfeit ? "你 2 : 0 Bot · 你赢了！🎉" : "你 2 : 2 Bot · 平局。",
+      "第 1 轮：你：心想事成（+2） / " + (forfeit
+        ? "Bot 放弃：没有给出合规成语（本轮 0 分）" : "Bot：成竹在胸（+2）"),
+      "输入 /restart 再来一局，或 /rounds 加轮数继续。",
+    ]);
+  });
+}

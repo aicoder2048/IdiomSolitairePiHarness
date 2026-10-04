@@ -43,6 +43,19 @@ export function createPanel({ title, lines, footer, theme }: PanelContent): Comp
   };
 }
 
+/** 信息面板捕获任意键关闭；重复输入不会重复完成。 */
+export function createDismissiblePanel(content: PanelContent, done: () => void): Component {
+  let closed = false;
+  return {
+    ...createPanel(content),
+    handleInput() {
+      if (closed) return;
+      closed = true;
+      done();
+    },
+  };
+}
+
 /** 捕获焦点的候选选择框；只有确认才返回词，Esc 返回 undefined。 */
 export function createHintSelector(
   hints: readonly string[], remaining: number, theme: PanelContent["theme"],

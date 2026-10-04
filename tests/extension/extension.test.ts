@@ -442,3 +442,155 @@ test("选择框等待不暂停计时，超时确认按跳过且不扣提示", as
   expect(pi.widgets.get("idiom-board")!.join("\n")).toContain("剩余提示 2 次");
   expect(llm.roles()).toEqual(["hints"]);
 });
+
+// ---------- 对局结算 ----------
+const finalCards = () => pi.cards().filter((lines) => lines[0] === "🏁 对局结束");
+const drawSummary = [
+  "🏁 对局结束", "你 2 : 2 Bot · 平局。",
+  "第 1 轮：你：心想事成（+2） / Bot：成竹在胸（+2）",
+  "输入 /restart 再来一局，或 /rounds 加轮数继续。",
+];
+
+for (const mode of [undefined, "rpc", "json", "print"] as const) {
+  test(`结算 ${mode ?? "默认 fake"}：无 UI 也写相同文字的卡片，不调 custom`, async () => {
+    await setup({ mode });
+    pi.ctx.hasUI = false;
+    await pi.command("rounds", "1");
+    await pi.input("心想事成");
+    expect((await pi.submit("成竹在胸")).terminate).toBe(true);
+    expect(pi.cards()).toHaveLength(2);
+    expect(finalCards()).toEqual([drawSummary]);
+    expect(pi.customCalls).toHaveLength(0);
+  });
+}
+
+test("TUI 结算非阻塞、相同文字、任意键关闭且不增加模型消息或用量", async () => {
+  await setup({ mode: "tui" });
+  await pi.command("rounds", "1");
+  await pi.input("心想事成");
+  const result = await pi.submit("成竹在胸");
+  expect(result.terminate).toBe(true);
+  expect(result.content[0].text).not.toContain("🏁 对局结束");
+  expect(pi.customCalls).toHaveLength(1);
+  expect(pi.customCalls[0]!.options).toEqual({ overlay: true,
+    overlayOptions: { anchor: "center", width: "100%", margin: 1 } });
+  expect(pi.customCalls[0]!.completed).toBe(false);
+  expect(pi.cards()).toHaveLength(1);
+  expect(finalCards()).toEqual([]);
+  const calls = llm.calls.length;
+  expect(calls).toBe(2); // 只有人类与 Bot 的裁判调用
+  const panel = await hintPanel();
+  const text = panel.render(160).map(stripTerminalSequences).join("\n");
+  for (const line of drawSummary) expect(text).toContain(line);
+  panel.handleInput!("x");
+  await flush();
+  expect(pi.customCalls[0]!.completed).toBe(true);
+  expect(llm.calls).toHaveLength(calls);
+  expect(pi.userMessages).toEqual([]);
+  expect(finalCards()).toEqual([]);
+});
+
+for (const mode of ["tui", "rpc"] as const) {
+  test(`${mode} 非末轮、失败尝试与第一次催促不显示结算`, async () => {
+    await setup({ mode });
+    await pi.command("rounds", "2");
+    await pi.input("心想事成");
+    await pi.submit("一马当先");
+    await pi.settle();
+    expect(finalCards()).toEqual([]);
+    expect(pi.customCalls).toHaveLength(0);
+    await pi.submit("成竹在胸");
+    expect(finalCards()).toEqual([]);
+    expect(pi.customCalls).toHaveLength(0);
+  });
+
+  for (const route of ["success", "retry", "no-tool", "aborted", "error", "settled"] as const) {
+    test(`${mode} 末轮 ${route} 只结算一次，后续生命周期/提交/状态/输入不重复`, async () => {
+      await setup({ mode });
+      await pi.command("rounds", "1");
+      await pi.input("心想事成");
+      if (route === "success") await pi.submit("成竹在胸");
+      else if (route === "retry") {
+        for (let i = 0; i < 3; i++) await pi.submit("一马当先");
+      } else if (route === "no-tool") {
+        await pi.settle();
+        expect(finalCards()).toHaveLength(0);
+        expect(pi.customCalls).toHaveLength(0);
+        await pi.settle();
+      } else if (route === "settled") await pi.emit("agent_settled");
+      else await pi.settle(route);
+      let text: string;
+      if (mode === "tui") {
+        expect(pi.customCalls).toHaveLength(1);
+        expect(pi.customCalls[0]!.options?.overlay).toBe(true);
+        const panel = await hintPanel();
+        text = panel.render(200).map(stripTerminalSequences).join("\n");
+        panel.handleInput!("\r");
+      } else {
+        expect(finalCards()).toHaveLength(1);
+        text = finalCards()[0]!.join("\n");
+      }
+      expect(text).toContain("第 1 轮：你：心想事成（+2）");
+      if (route !== "success") {
+        expect(text).toContain("Bot 放弃：");
+        expect(text).toContain("（本轮 0 分）");
+        const reason = { retry: "接不上", "no-tool": "没有调用 submit_idiom", aborted: "回合被中断",
+          error: "模型调用出错", settled: "回合意外结束" }[route];
+        expect(text).toContain(reason);
+      }
+      const calls = llm.calls.length;
+      for (let i = 0; i < 2; i++) {
+        await pi.settle();
+        await pi.emit("agent_settled");
+      }
+      await pi.submit("成竹在胸");
+      await pi.command("status");
+      await pi.input("胸有成竹");
+      expect(finalCards()).toHaveLength(mode === "rpc" ? 1 : 0);
+      expect(pi.customCalls).toHaveLength(mode === "tui" ? 1 : 0);
+      expect(llm.calls).toHaveLength(calls);
+      expect(pi.userMessages).toEqual([]);
+    });
+  }
+}
+
+for (const command of ["rounds", "restart", "undo"] as const) {
+  test(`TUI /${command} 后的新终局仍显示结算`, async () => {
+    await setup({ mode: "tui" });
+    await pi.command("rounds", "1");
+    await pi.input("心想事成");
+    await pi.submit("成竹在胸");
+    (await hintPanel()).handleInput!("x");
+    await pi.command(command, command === "rounds" ? "2" : "");
+    await pi.input(command === "rounds" ? "胸有成竹" : "心想事成");
+    await pi.submit(command === "rounds" ? "竹报平安" : "成竹在胸");
+    expect(pi.customCalls).toHaveLength(2);
+    expect(finalCards()).toHaveLength(0);
+    (await hintPanel(1)).handleInput!("x");
+  });
+}
+
+for (const failure of ["throw", "reject"] as const) {
+  test(`TUI custom ${failure} 回退一次卡片，不影响已结算工具结果`, async () => {
+    await setup({ mode: "tui" });
+    const spy = failure === "throw" ? spyOn(pi.ctx.ui, "custom").mockImplementation(() => {
+      throw new Error("UI unavailable");
+    }) : undefined;
+    try {
+      await pi.command("rounds", "1");
+      await pi.input("心想事成");
+      const result = await pi.submit("成竹在胸");
+      if (failure === "reject") pi.customCalls[0]!.reject(new Error("UI unavailable"));
+      await flush();
+      expect(result.terminate).toBe(true);
+      expect(finalCards()).toEqual([drawSummary]);
+      await pi.settle();
+      await pi.emit("agent_settled");
+      expect(finalCards()).toEqual([drawSummary]);
+      if (spy) expect(spy).toHaveBeenCalledTimes(1);
+      else expect(pi.customCalls).toHaveLength(1);
+      expect(llm.calls).toHaveLength(2);
+      expect(pi.userMessages).toEqual([]);
+    } finally { spy?.mockRestore(); }
+  });
+}

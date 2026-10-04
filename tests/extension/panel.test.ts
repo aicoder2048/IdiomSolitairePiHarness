@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { createHintSelector, createPanel, panelWidth } from "../../src/extension/panel.ts";
+import { createDismissiblePanel, createHintSelector, createPanel, panelWidth } from "../../src/extension/panel.ts";
 import { fakeTheme } from "./fake-pi.ts";
 
 const content = {
@@ -86,3 +86,33 @@ test("选择框 Esc 取消，不自动选第一个", () => {
   panel.handleInput!("\x1b");
   expect(chosen).toEqual([undefined]);
 });
+
+
+for (const key of ["x", "\r", "\x1b", "\x1b[A"]) {
+  test(`结算面板任意键关闭且只关闭一次：${JSON.stringify(key)}`, () => {
+    let closed = 0;
+    const summary = { ...content, title: "🏁 对局结束", lines: ["你 2 : 2 Bot · 平局。", "第 1 轮：你：心想事成（+2）"],
+      footer: "输入 /restart 再来一局，或 /rounds 加轮数继续。" };
+    const panel = createDismissiblePanel(summary, () => closed++);
+    const rendered = panel.render(120);
+    expect(rendered).toEqual(createPanel(summary).render(120));
+    const text = rendered.map(stripTerminalSequences).join("\n");
+    for (const line of [summary.title, ...summary.lines, summary.footer]) expect(text).toContain(line);
+    panel.invalidate();
+    expect(panel.render(120)).toEqual(rendered);
+    expect(closed).toBe(0);
+    panel.handleInput!(key);
+    panel.handleInput!(key);
+    expect(closed).toBe(1);
+  });
+}
+
+for (const width of [0, 1, 2, 3, 5, 20, 80]) {
+  test(`结算面板长中文在 ${width} 列内安全截断`, () => {
+    const panel = createDismissiblePanel({ ...content, lines: ["第 1 轮：很长的中文结算".repeat(20)] }, () => {});
+    for (const row of panel.render(width)) {
+      expect(visibleWidth(row)).toBeLessThanOrEqual(width);
+      expect(visibleWidth(stripTerminalSequences(row))).toBeLessThanOrEqual(width);
+    }
+  });
+}
