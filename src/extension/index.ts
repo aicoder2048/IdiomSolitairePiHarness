@@ -20,7 +20,7 @@ import type { LLMClient } from "../engine/llm.ts";
 import { BOT_SYSTEM_PROMPT, NUDGE_MESSAGE, SUBMIT_TOOL, buildRoundEndMessage } from "../engine/prompts.ts";
 import { currentRoundOnly } from "./context-filter.ts";
 import { PiLLMClient } from "./llm-client.ts";
-import { createHintSelector, hintFooter, panelWidth, type PanelContent } from "./panel.ts";
+import { createDismissiblePanel, createHintSelector, hintFooter, panelWidth, type PanelContent } from "./panel.ts";
 import * as view from "./view.ts";
 
 const WIDGET_KEY = "idiom-board";
@@ -108,6 +108,30 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
       pi.appendEntry<CardData>(CARD, { title, lines });
     }
 
+    /** 结算只给玩家看；不等待按键，以免阻塞 Bot 工具的 terminate。 */
+    async function presentFinal(lines: string[], ctx: ExtensionContext): Promise<void> {
+      if (ctx.mode !== "tui") {
+        card(lines);
+        return;
+      }
+      const overlayOptions: OverlayOptions = { anchor: "center", margin: 1 };
+      try {
+        await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+          const content: PanelContent = {
+            title: lines[0]!, lines: lines.slice(1, -1), footer: lines.at(-1), theme,
+          };
+          overlayOptions.width = panelWidth(content, tui.terminal.columns);
+          overlayOptions.visible = (columns) => {
+            overlayOptions.width = panelWidth(content, columns);
+            return true;
+          };
+          return createDismissiblePanel(content, () => done());
+        }, { overlay: true, overlayOptions });
+      } catch {
+        card(lines);
+      }
+    }
+
     pi.registerEntryRenderer<CardData>(CARD, (entry, _options, theme) => {
       const data = entry.data ?? { lines: [] };
       const box = new Box(1, 0, (text) => theme.bg("customMessageBg", text));
@@ -147,7 +171,7 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
 
     function settle(res: Extract<BotSubmitResult, { kind: "round" }>, ctx: ExtensionContext): void {
       card(view.roundCardLines(res.record));
-      if (res.gameOver) card(view.finalLines(game));
+      if (res.gameOver) void presentFinal(view.finalLines(game), ctx);
       refresh(ctx);
     }
 
