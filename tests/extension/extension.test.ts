@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { IdiomGame } from "../../src/engine/game.ts";
+import { statusLines } from "../../src/extension/view.ts";
 import { BOT_SYSTEM_PROMPT, SUBMIT_TOOL } from "../../src/engine/prompts.ts";
 import { createIdiomExtension } from "../../src/extension/index.ts";
 import { FakeClock, FakeLLM, type ScriptItem } from "../fakes.ts";
@@ -180,6 +182,112 @@ test("/status 与 /help 写成卡片，不发给模型", async () => {
   await pi.command("status");
   await pi.command("help");
   expect(pi.entries.map((e) => e.data.title)).toEqual(["📊 状态", "📖 成语接龙"]);
+  expect(pi.userMessages).toEqual([]);
+});
+
+for (const mode of [undefined, "rpc", "json", "print"] as const) {
+  for (const hasUI of [true, false]) {
+    test(`/status ${mode ?? "默认 fake"} hasUI=${hasUI} 保留卡片且 0 token`, async () => {
+      await setup({ mode });
+      pi.ctx.hasUI = hasUI;
+      await pi.command("status");
+      expect(pi.entries).toEqual([{
+        customType: "idiom-card",
+        data: { title: "📊 状态", lines: statusLines(new IdiomGame({ llm, clock: clock.read })) },
+      }]);
+      expect(pi.customCalls).toEqual([]);
+      expect(llm.calls).toEqual([]);
+      expect(pi.userMessages).toEqual([]);
+    });
+  }
+}
+
+test("TUI /status 只开居中浮层，原样显示状态，任意键关闭且 0 token", async () => {
+  await setup({ mode: "tui" });
+  let finished = false;
+  const command = pi.command("status").then(() => { finished = true; });
+  await flush();
+  expect(pi.customCalls).toHaveLength(1);
+  expect(pi.customCalls[0]!.options?.overlay).toBe(true);
+  expect(pi.customCalls[0]!.completed).toBe(false);
+  expect(finished).toBe(false);
+  expect(pi.entries).toEqual([]);
+  const panel = await hintPanel(0, 200);
+  const options = hintOptions();
+  expect(options).toMatchObject({ anchor: "center", margin: 1 });
+  const text = panel.render(options.width as number).map(stripTerminalSequences).join("\n");
+  for (const line of ["📊 状态", ...statusLines(new IdiomGame({ llm, clock: clock.read })), "按任意键关闭"]) {
+    expect(text).toContain(line);
+  }
+  expect(options.visible!(30, 10)).toBe(true);
+  expect(options.width as number).toBeLessThanOrEqual(30);
+  for (const line of panel.render(options.width as number)) expect(visibleWidth(line)).toBeLessThanOrEqual(30);
+  panel.handleInput!("x");
+  await command;
+  expect(finished).toBe(true);
+  expect(pi.customCalls[0]!.completed).toBe(true);
+  expect(pi.entries).toEqual([]);
+  expect(llm.calls).toEqual([]);
+  expect(pi.userMessages).toEqual([]);
+});
+
+test("TUI /status 可重复查看已完成回合，不累积卡片或模型调用", async () => {
+  async function playRound() {
+    await pi.command("rounds", "5");
+    await pi.input("心想事成");
+    await pi.submit("成竹在胸");
+  }
+  await playRound();
+  await pi.command("status");
+  const expected = pi.cards().at(-1)!;
+  await setup({ mode: "tui" });
+  await playRound();
+  const entries = [...pi.entries];
+  const calls = [...llm.calls];
+  const messages = [...pi.userMessages];
+  for (let i = 0; i < 2; i++) {
+    const command = pi.command("status");
+    await flush();
+    expect(pi.customCalls).toHaveLength(i + 1);
+    expect(pi.customCalls[i]!.options?.overlay).toBe(true);
+    const panel = await hintPanel(i, 200);
+    const text = panel.render(200).map(stripTerminalSequences).join("\n");
+    for (const line of expected) expect(text).toContain(line);
+    panel.handleInput!(i ? "\x1b" : "x");
+    await command;
+    expect(pi.customCalls[i]!.completed).toBe(true);
+    expect(pi.entries).toEqual(entries);
+    expect(llm.calls).toEqual(calls);
+    expect(pi.userMessages).toEqual(messages);
+  }
+});
+
+for (const failure of ["throw", "reject"] as const) {
+  test(`TUI /status custom ${failure} 只通知，不写卡片或调用模型`, async () => {
+    await setup({ mode: "tui" });
+    const spy = failure === "throw" ? spyOn(pi.ctx.ui, "custom").mockImplementation(() => {
+      throw new Error("UI unavailable");
+    }) : undefined;
+    try {
+      const command = pi.command("status");
+      await flush();
+      if (failure === "reject") pi.customCalls[0]!.reject(new Error("UI unavailable"));
+      await command;
+      expect(pi.notices.at(-1)).toEqual({ message: "状态面板显示失败，请重新 /status。", type: "error" });
+      expect(pi.entries).toEqual([]);
+      expect(llm.calls).toEqual([]);
+      expect(pi.userMessages).toEqual([]);
+    } finally { spy?.mockRestore(); }
+  });
+}
+
+test("TUI /help 与 /chain 仍写卡片，不调用 custom 或模型", async () => {
+  await setup({ mode: "tui" });
+  await pi.command("help");
+  await pi.command("chain");
+  expect(pi.entries.map((entry) => entry.data.title)).toEqual(["📖 成语接龙", "📜 接龙链"]);
+  expect(pi.customCalls).toEqual([]);
+  expect(llm.calls).toEqual([]);
   expect(pi.userMessages).toEqual([]);
 });
 
@@ -551,10 +659,20 @@ for (const mode of ["tui", "rpc"] as const) {
         await pi.emit("agent_settled");
       }
       await pi.submit("成竹在胸");
-      await pi.command("status");
+      const status = pi.command("status");
+      if (mode === "tui") {
+        await flush();
+        expect(pi.customCalls).toHaveLength(2);
+        const panel = await hintPanel(1);
+        const text = panel.render(200).map(stripTerminalSequences).join("\n");
+        expect(text).toContain("📊 状态");
+        expect(text).not.toContain("🏁 对局结束");
+        panel.handleInput!("x");
+      }
+      await status;
       await pi.input("胸有成竹");
       expect(finalCards()).toHaveLength(mode === "rpc" ? 1 : 0);
-      expect(pi.customCalls).toHaveLength(mode === "tui" ? 1 : 0);
+      expect(pi.customCalls).toHaveLength(mode === "tui" ? 2 : 0);
       expect(llm.calls).toHaveLength(calls);
       expect(pi.userMessages).toEqual([]);
     });
