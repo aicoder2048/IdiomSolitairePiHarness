@@ -15,11 +15,9 @@
 
 每行包含序号、出词者、成语及带正负号的已记账步分。空链显示「还没有成语」。查看本身 **0 token**，只给人看，不向模型发送消息，也不改变对局；仪表盘和 `/status` 保持原样。
 
-详见 [使用配方](docs/tech-papers/cookbook.md)。
-
 ## 工厂队列
 
-PR 合并、issue 关闭后，下一轮 `just autoqueue` 会清掉残留的 `factory:pr-open`，其他标签不动；`just autoqueue --dry-run` 只预览清理与排队。详见 [工厂标签生命周期](docs/factory-labels.md)。
+PR 合并、issue 关闭后，下一轮 `just autoqueue` 会清掉残留的 `factory:pr-open`，其他标签不动；`just autoqueue --dry-run` 只预览清理与排队。详见 [工厂标签生命周期](docs/study-notes/factory-labels-guide-20261003-1605.md)。
 
 ## 离线验证
 
