@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { readRecords } from "../../src/extension/records-store.ts";
 import { IdiomGame } from "../../src/engine/game.ts";
 import { statusLines } from "../../src/extension/view.ts";
 import { BOT_SYSTEM_PROMPT, SUBMIT_TOOL } from "../../src/engine/prompts.ts";
@@ -21,8 +25,24 @@ async function setup(opts: { hints?: ScriptItem[]; judge?: (idiom: string) => bo
   await pi.emit("session_start", { reason: "startup" });
 }
 
-beforeEach(() => setup());
-afterEach(() => pi.emit("session_shutdown"));
+let recordsDir: string;
+let recordsPath: string;
+let previousRecordsPath: string | undefined;
+beforeEach(async () => {
+  previousRecordsPath = process.env.IDIOM_RECORDS_FILE;
+  recordsDir = mkdtempSync(join(tmpdir(), "idiom-extension-"));
+  recordsPath = join(recordsDir, "nested", "records.json");
+  process.env.IDIOM_RECORDS_FILE = recordsPath;
+  await setup();
+});
+afterEach(async () => {
+  try { await pi.emit("session_shutdown"); }
+  finally {
+    if (previousRecordsPath === undefined) delete process.env.IDIOM_RECORDS_FILE;
+    else process.env.IDIOM_RECORDS_FILE = previousRecordsPath;
+    rmSync(recordsDir, { recursive: true, force: true });
+  }
+});
 
 // ---------- 启动 ----------
 
@@ -151,6 +171,7 @@ test("确定性命令 0 token", async () => {
     ["restart", "天"],
     ["status", ""],
     ["chain", ""],
+    ["records", ""],
     ["help", ""],
   ] as const) {
     await pi.command(name, args);
@@ -614,7 +635,9 @@ for (const mode of ["tui", "rpc"] as const) {
     await pi.settle();
     expect(finalCards()).toEqual([]);
     expect(pi.customCalls).toHaveLength(0);
+    expect(existsSync(recordsPath)).toBe(false);
     await pi.submit("成竹在胸");
+    expect(existsSync(recordsPath)).toBe(false);
     expect(finalCards()).toEqual([]);
     expect(pi.customCalls).toHaveLength(0);
   });
@@ -634,6 +657,10 @@ for (const mode of ["tui", "rpc"] as const) {
         await pi.settle();
       } else if (route === "settled") await pi.emit("agent_settled");
       else await pi.settle(route);
+      const saved = readRecords();
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toMatchObject({ rounds: 1, scores: { human: 2, bot: route === "success" ? 2 : 0 },
+        winner: route === "success" ? "draw" : "human" });
       let text: string;
       if (mode === "tui") {
         expect(pi.customCalls).toHaveLength(1);
@@ -672,6 +699,7 @@ for (const mode of ["tui", "rpc"] as const) {
       await status;
       await pi.input("胸有成竹");
       expect(finalCards()).toHaveLength(mode === "rpc" ? 1 : 0);
+      expect(readRecords()).toEqual(saved);
       expect(pi.customCalls).toHaveLength(mode === "tui" ? 2 : 0);
       expect(llm.calls).toHaveLength(calls);
       expect(pi.userMessages).toEqual([]);
@@ -717,5 +745,128 @@ for (const failure of ["throw", "reject"] as const) {
       expect(llm.calls).toHaveLength(2);
       expect(pi.userMessages).toEqual([]);
     } finally { spy?.mockRestore(); }
+  });
+}
+
+
+// ---------- 跨局战绩 ----------
+
+async function finishDraw() {
+  await pi.command("rounds", "1");
+  await pi.input("心想事成");
+  return pi.submit("成竹在胸");
+}
+
+test("终局立即保存完整战绩，无 UI 也保存，新 session 可查看", async () => {
+  pi.ctx.hasUI = false;
+  await pi.command("rounds", "1");
+  await pi.input("心想事成");
+  expect(existsSync(recordsPath)).toBe(false);
+  expect((await pi.submit("成竹在胸")).terminate).toBe(true);
+  const rows = readRecords();
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ mode: "normal", rounds: 1, scores: { human: 2, bot: 2 }, winner: "draw" });
+  expect(rows[0]!.id).toBeTruthy();
+  expect(new Date(rows[0]!.endedAt).toISOString()).toBe(rows[0]!.endedAt);
+  await setup();
+  await pi.command("records");
+  expect(pi.cards().at(-1)!.join("\n")).toContain("总场次：1 · 胜 0 / 负 0 / 平 1");
+  await finishDraw();
+  expect(readRecords()).toHaveLength(2);
+  expect(readRecords()[1]!.id).not.toBe(rows[0]!.id);
+});
+
+test("undo 重打覆盖，失败和忙碌 restart 保留 id，成功 restart 新增一局", async () => {
+  await finishDraw();
+  const first = readRecords()[0]!;
+  await pi.command("restart", "invalid");
+  await pi.command("undo");
+  expect(readRecords()).toEqual([first]);
+  await pi.input("心想事成");
+  await pi.command("restart", "天"); // 忙碌，不能更换 id
+  await pi.settle("aborted");
+  expect(readRecords()).toHaveLength(1);
+  expect(readRecords()[0]).toMatchObject({ id: first.id, winner: "human", scores: { human: 2, bot: 0 } });
+  const replaced = readRecords()[0]!;
+  await pi.command("restart", "心");
+  await finishDraw();
+  expect(readRecords()).toHaveLength(2);
+  expect(readRecords()[0]).toEqual(replaced);
+  expect(readRecords()[1]!.id).not.toBe(first.id);
+});
+
+test("加轮继续后覆盖原 id；降低轮数结束空闲对局才保存，不额外开结算浮层", async () => {
+  await finishDraw();
+  const first = readRecords()[0]!;
+  await pi.command("rounds", "2");
+  expect(readRecords()).toEqual([first]);
+  await pi.input("胸有成竹");
+  await pi.submit("竹报平安");
+  expect(readRecords()).toHaveLength(1);
+  expect(readRecords()[0]).toMatchObject({ id: first.id, rounds: 2 });
+  await setup({ mode: "tui" });
+  await pi.command("rounds", "3");
+  await pi.input("心想事成");
+  await pi.submit("成竹在胸");
+  await pi.command("rounds", "1");
+  expect(readRecords()).toHaveLength(2);
+  expect(readRecords()[1]!.rounds).toBe(1);
+  expect(pi.customCalls).toEqual([]);
+});
+
+test("Bot 待提交时 /rounds 不能提前保存", async () => {
+  await pi.input("心想事成");
+  await pi.submit("成竹在胸");
+  await pi.input("胸有成竹");
+  await pi.command("rounds", "1");
+  expect(existsSync(recordsPath)).toBe(false);
+  await pi.submit("竹报平安");
+  expect(readRecords()).toHaveLength(1);
+  expect(readRecords()[0]!.rounds).toBe(2); // 待提交的实际末轮完成后才保存
+});
+
+for (const mode of ["tui", "rpc"] as const) {
+  test(`${mode} /records 始终卡片，空历史/反复查看不改变状态、文件或模型用量`, async () => {
+    await setup({ mode });
+    await pi.command("records");
+    expect(pi.entries.at(-1)!.data).toEqual({ title: "📚 战绩", lines: ["还没有战绩"] });
+    expect(pi.customCalls).toEqual([]);
+    expect(llm.calls).toEqual([]);
+    expect(existsSync(recordsPath)).toBe(false);
+    await finishDraw();
+    const file = readFileSync(recordsPath, "utf8");
+    const calls = [...llm.calls];
+    const board = [...pi.widgets.get("idiom-board")!];
+    const panels = pi.customCalls.length;
+    for (let i = 0; i < 2; i++) await pi.command("records");
+    expect(pi.cards().at(-1)!.join("\n")).toContain("普通 · 你 2 : 2 Bot · 平");
+    expect(pi.customCalls).toHaveLength(panels);
+    expect(pi.widgets.get("idiom-board")).toEqual(board);
+    expect(readFileSync(recordsPath, "utf8")).toBe(file);
+    expect(llm.calls).toEqual(calls);
+    expect(pi.userMessages).toEqual([]);
+  });
+}
+
+for (const failure of ["corrupt", "parent-file"] as const) {
+  test(`战绩 ${failure} 读写警告但游戏继续，不覆盖坏文件`, async () => {
+    if (failure === "corrupt") mkdirSync(dirname(recordsPath), { recursive: true });
+    const broken = failure === "corrupt" ? recordsPath : dirname(recordsPath);
+    writeFileSync(broken, "broken");
+    await pi.command("records");
+    expect(pi.notices.at(-1)?.type).toBe("warning");
+    expect(pi.lastNotice()).toContain("战绩读取失败");
+    expect(pi.cards()).toEqual([]);
+    expect(llm.calls).toEqual([]);
+    expect(pi.userMessages).toEqual([]);
+    expect((await finishDraw()).terminate).toBe(true);
+    expect(pi.notices.at(-1)?.type).toBe("warning");
+    expect(pi.lastNotice()).toContain("战绩保存失败");
+    expect(finalCards()).toHaveLength(1);
+    expect(readFileSync(broken, "utf8")).toBe("broken");
+    await pi.command("restart", "心");
+    expect((await pi.input("心想事成")).action).toBe("transform");
+    await pi.settle("aborted"); // 生命周期路径也不能抛出文件错误
+    expect(readFileSync(broken, "utf8")).toBe("broken");
   });
 }

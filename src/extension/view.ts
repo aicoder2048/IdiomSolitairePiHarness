@@ -1,6 +1,7 @@
 /** 纯展示：把对局状态变成要显示的文字行。不碰 Pi，方便测试，也方便以后换成带主题色的组件。 */
 
 import { MODE_CONFIGS, MODE_LABELS, PASS_PENALTY, type HumanMove, type IdiomGame, type RoundRecord } from "../engine/game.ts";
+import { summarizeRecords, type GameRecord } from "../engine/records.ts";
 import type { UsageTotals } from "./llm-client.ts";
 
 /** 斜杠命令：名字 → [参数提示, 说明]。注册命令与 /help 共用这一张表。 */
@@ -14,6 +15,7 @@ export const COMMANDS: Record<string, [args: string, description: string]> = {
   restart: ["[首字]", "重新开局"],
   status: ["", "详细状态面板"],
   chain: ["", "查看完整接龙链"],
+  records: ["", "查看跨局战绩"],
   help: ["", "查看命令与规则"],
 };
 
@@ -132,4 +134,19 @@ export function helpLines(): string[] {
 
 export function usageStatus(usage: UsageTotals): string {
   return `裁判/提示 ${usage.calls} 次 · ${usage.input + usage.output} tokens`;
+}
+
+
+/** 全量统计、最近十局；只生成玩家卡片，不修改历史。 */
+export function recordsLines(records: readonly GameRecord[]): string[] {
+  if (records.length === 0) return ["还没有战绩"];
+  const { total, wins, losses, draws, winRate } = summarizeRecords(records);
+  const verdict = { human: "胜", bot: "负", draw: "平" };
+  return [
+    `总场次：${total} · 胜 ${wins} / 负 ${losses} / 平 ${draws}`,
+    `胜率：${(winRate * 100).toFixed(1)}%`,
+    "最近 10 局：",
+    ...[...records].sort((a, b) => Date.parse(b.endedAt) - Date.parse(a.endedAt)).slice(0, 10).map((r) =>
+      `${new Date(r.endedAt).toISOString().slice(0, 10)} · ${MODE_LABELS[r.mode]} · 你 ${r.scores.human} : ${r.scores.bot} Bot · ${verdict[r.winner]}`),
+  ];
 }
