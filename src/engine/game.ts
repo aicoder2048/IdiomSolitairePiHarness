@@ -33,6 +33,7 @@ export const MODE_CONFIGS: Record<Mode, Record<Player, PlayerConfig>> = {
   hard: { human: { multiplier: 1, allowHomophone: false, dictLevel: "lax" }, bot: botConfig() },
   extreme: { human: { multiplier: 1, allowHomophone: false, dictLevel: "strict" }, bot: botConfig() },
 };
+export const HINT_LIMITS: Record<Mode, number> = { easy: 3, normal: 2, hard: 1, extreme: 0 };
 export const MODES = Object.keys(MODE_CONFIGS) as Mode[];
 export const MODE_LABELS: Record<Mode, string> = { easy: "简单", normal: "普通", hard: "困难", extreme: "极限" };
 
@@ -82,6 +83,7 @@ export type Outcome =
   | { kind: "invalid"; message: string }
   | { kind: "error"; message: string }
   | { kind: "command"; message: string }
+  | { kind: "hints"; hints: string[] }
   | { kind: "bot_turn"; human: HumanMove; prompt: string; hints: string[] };
 
 export type BotSubmitResult =
@@ -105,6 +107,7 @@ interface Snapshot {
   lastChar: string;
   historyLen: number;
   logLen: number;
+  hintsUsed: number;
 }
 
 interface PendingBotTurn {
@@ -129,6 +132,7 @@ export class IdiomGame {
   currentRound = 1;
   scores: Record<Player, number> = { human: 0, bot: 0 };
   roundLog: RoundRecord[] = [];
+  private hintsUsed = 0;
   private snapshots: Snapshot[] = [];
   private pending: PendingBotTurn | null = null;
   private turnStartedAt = 0;
@@ -148,6 +152,10 @@ export class IdiomGame {
   }
 
   // ------------------------------------------------------------------ 状态
+
+  get hintsRemaining(): number {
+    return Math.max(0, HINT_LIMITS[this.mode] - this.hintsUsed);
+  }
 
   get gameOver(): boolean {
     return this.currentRound > this.maxRounds;
@@ -184,6 +192,7 @@ export class IdiomGame {
     this.scores = { human: 0, bot: 0 };
     this.roundLog = [];
     this.snapshots = [];
+    this.hintsUsed = 0;
     this.pending = null;
     this.chain.clear();
     this.restartTimer();
@@ -200,6 +209,16 @@ export class IdiomGame {
   // ------------------------------------------------------------------ 人类这一步
 
   async submitHuman(raw: string, signal?: AbortSignal): Promise<Outcome> {
+    return this.submitHumanMove(raw, false, signal);
+  }
+
+  /** 提示选词与手打共用校验、倒计时和计分；仅成功入账才扣提示。 */
+  async submitHint(raw: string, signal?: AbortSignal): Promise<Outcome> {
+    if (this.hintsRemaining === 0) return { kind: "info", message: "本局提示次数已用完" };
+    return this.submitHumanMove(raw, true, signal);
+  }
+
+  private async submitHumanMove(raw: string, usingHint: boolean, signal?: AbortSignal): Promise<Outcome> {
     const text = raw.trim();
     if (!text) return { kind: "noop" };
     if (this.pending) return BUSY;
@@ -220,7 +239,7 @@ export class IdiomGame {
     );
     if (this.pending) return BUSY; // 等裁判期间已经有别的输入开了回合
     if (!verdict.isValid) return { kind: "invalid", message: verdict.reason };
-    return this.startRound({ kind: "idiom", idiom, gained: verdict.score * cfg.multiplier, reason: verdict.reason });
+    return this.startRound({ kind: usingHint ? "hint" : "idiom", idiom, gained: verdict.score * cfg.multiplier, reason: verdict.reason });
   }
 
   pass(): Outcome {
@@ -232,10 +251,11 @@ export class IdiomGame {
   async hint(n = 3, signal?: AbortSignal): Promise<Outcome> {
     if (this.pending) return BUSY;
     if (this.gameOver) return { kind: "info", message: GAME_OVER_HINT };
+    if (this.hintsRemaining === 0) return { kind: "info", message: "本局提示次数已用完" };
     const hints = await this.suggestHints(this.lastChar, n, signal);
     if (this.pending) return BUSY;
     if (hints.length === 0) return { kind: "error", message: "暂时没拿到可用的提示，本轮不计，请继续作答或 /pass。" };
-    return this.startRound({ kind: "hint", idiom: "", gained: 0, reason: "使用提示" }, hints);
+    return { kind: "hints", hints };
   }
 
   /** 给人类的提示：LLM 出候选，确定性规则过滤（只留原字开头、未用过、去重）。 */
@@ -265,7 +285,9 @@ export class IdiomGame {
       lastChar: this.lastChar,
       historyLen: this.chain.turns.length,
       logLen: this.roundLog.length,
+      hintsUsed: this.hintsUsed,
     });
+    if (human.kind === "hint") this.hintsUsed += 1;
     const targetChar = this.lastChar;
     this.scores.human += human.gained;
     if (human.idiom) {
@@ -379,6 +401,7 @@ export class IdiomGame {
     if (!snap) return { kind: "error", message: "没有可以撤销的回合。" };
     const undone = this.roundLog[snap.logLen];
     this.scores = { ...snap.scores };
+    this.hintsUsed = snap.hintsUsed;
     this.currentRound = snap.currentRound;
     this.lastChar = snap.lastChar;
     this.chain.truncate(snap.historyLen);

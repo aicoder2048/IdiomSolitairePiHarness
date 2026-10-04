@@ -13,13 +13,14 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Box, Text } from "@earendil-works/pi-tui";
+import { Box, Text, type OverlayOptions } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { IdiomGame, MODES, type BotSubmitResult, type GameOptions, type Outcome } from "../engine/game.ts";
 import type { LLMClient } from "../engine/llm.ts";
 import { BOT_SYSTEM_PROMPT, NUDGE_MESSAGE, SUBMIT_TOOL, buildRoundEndMessage } from "../engine/prompts.ts";
 import { currentRoundOnly } from "./context-filter.ts";
 import { PiLLMClient } from "./llm-client.ts";
+import { createHintSelector, hintFooter, panelWidth, type PanelContent } from "./panel.ts";
 import * as view from "./view.ts";
 
 const WIDGET_KEY = "idiom-board";
@@ -50,6 +51,46 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     let nudges = 0;
     let ticker: ReturnType<typeof setInterval> | undefined;
 
+    let dismissHint: (() => void) | undefined;
+    let hintEpoch = 0;
+    let pendingHints: string[] = [];
+
+    function closeHint(): void {
+      hintEpoch += 1;
+      dismissHint?.();
+    }
+
+    /** 捕获键盘焦点，等待确认或取消；关闭本身不写账。 */
+    async function chooseHint(hints: string[], ctx: ExtensionContext): Promise<string | undefined> {
+      let closed = false;
+      let done: ((value: string | undefined) => void) | undefined;
+      const close = () => { closed = true; done?.(undefined); };
+      dismissHint = close;
+      const overlayOptions: OverlayOptions = { anchor: "center", width: "60%", margin: 1 };
+      try {
+        return await ctx.ui.custom<string | undefined>((tui, theme, _keybindings, finish) => {
+          done = finish;
+          const content: PanelContent = {
+            title: "💡 提示", lines: hints.map((hint, i) => `❯ ${i + 1}. ${hint}`),
+            footer: hintFooter(game.hintsRemaining), theme,
+          };
+          overlayOptions.width = panelWidth(content, tui.terminal.columns);
+          overlayOptions.visible = (columns) => {
+            overlayOptions.width = panelWidth(content, columns);
+            return !closed;
+          };
+          if (closed) finish(undefined);
+          return createHintSelector(hints, game.hintsRemaining, theme, finish, () => tui.requestRender());
+        }, { overlay: true, overlayOptions });
+      } catch {
+        notify(ctx, "提示面板显示失败，请重新 /hint 或直接作答。", "error");
+        return undefined;
+      } finally {
+        closed = true;
+        if (dismissHint === close) dismissHint = undefined;
+      }
+    }
+
     // ---------------------------------------------------------------- 展示
 
     function notify(ctx: ExtensionContext, message: string, type: "info" | "warning" | "error" = "info"): void {
@@ -78,6 +119,7 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     /** 人类这一步的结果告诉玩家；开了新回合就返回要交给 Bot 的回合 prompt。 */
     function report(out: Outcome, ctx: ExtensionContext): string | undefined {
       switch (out.kind) {
+        case "hints":
         case "noop":
           return undefined;
         case "busy":
@@ -96,8 +138,8 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
           return undefined;
         case "bot_turn":
           nudges = 0;
-          if (out.hints.length > 0) card([`提示：${out.hints.join("、")}`, view.describeHumanMove(out.human)]);
-          else notify(ctx, view.describeHumanMove(out.human));
+          pendingHints = [];
+          notify(ctx, view.describeHumanMove(out.human));
           refresh(ctx);
           return out.prompt;
       }
@@ -117,7 +159,9 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     // ---------------------------------------------------------------- 生命周期
 
     pi.on("session_start", async (_event, ctx) => {
+      closeHint();
       piLLM?.bind(ctx);
+      pendingHints = [];
       game = newGame();
       nudges = 0;
       pi.setActiveTools([SUBMIT_TOOL]); // Bot 只有这一个工具：护栏写在代码里，不靠启动参数
@@ -132,6 +176,8 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     });
 
     pi.on("session_shutdown", () => {
+      closeHint();
+      pendingHints = [];
       if (ticker) clearInterval(ticker);
       ticker = undefined;
     });
@@ -140,12 +186,24 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
 
     pi.on("input", async (event, ctx) => {
       if (event.source === "extension") return { action: "continue" }; // 本扩展发出的回合 prompt
+      closeHint();
       const text = event.text.trim();
       if (text.startsWith("/")) {
         notify(ctx, `未知命令 ${text.split(/\s+/)[0]}，输入 /help 查看命令。`, "warning");
         return { action: "handled" };
       }
-      const prompt = report(await game.submitHuman(text, ctx.signal), ctx);
+      let candidate: string | undefined;
+      if (pendingHints.length > 0 && /^\d+$/.test(text)) {
+        candidate = pendingHints[Number(text) - 1];
+        if (!candidate) {
+          notify(ctx, `请输入 1–${pendingHints.length} 的候选编号或直接输入成语。`, "warning");
+          return { action: "handled" };
+        }
+      }
+      const out = pendingHints.length > 0
+        ? await game.submitHint(candidate ?? text, ctx.signal)
+        : await game.submitHuman(text, ctx.signal);
+      const prompt = report(out, ctx);
       return prompt === undefined ? { action: "handled" } : { action: "transform", text: prompt };
     });
 
@@ -217,7 +275,11 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     ): void {
       pi.registerCommand(name, {
         description: view.COMMANDS[name]![1],
-        handler: async (args, ctx) => handler(args, ctx),
+        handler: async (args, ctx) => {
+          closeHint();
+          if (["hint", "pass", "undo", "restart", "difficulty"].includes(name)) pendingHints = [];
+          await handler(args, ctx);
+        },
         getArgumentCompletions: choices
           ? (prefix) => choices.filter((c) => c.startsWith(prefix)).map((c) => ({ value: c, label: c }))
           : undefined,
@@ -230,7 +292,28 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
 
     command("hint", async (_args, ctx) => {
       notify(ctx, "正在想提示…");
-      startBotTurn(report(await game.hint(3, ctx.signal), ctx));
+      const epoch = hintEpoch;
+      const hintGame = game;
+      const out = await hintGame.hint(3, ctx.signal);
+      if (epoch !== hintEpoch) return;
+      if (out.kind !== "hints") {
+        report(out, ctx);
+        return;
+      }
+      if (ctx.mode !== "tui") {
+        pendingHints = out.hints;
+        card([...out.hints.map((hint, i) => `${i + 1}. ${hint}`),
+          "输入候选编号或直接输入成语", `剩余提示 ${game.hintsRemaining} 次`]);
+        return;
+      }
+      while (epoch === hintEpoch) {
+        const chosen = await chooseHint(out.hints, ctx);
+        if (chosen === undefined || epoch !== hintEpoch) return;
+        const result = await hintGame.submitHint(chosen, ctx.signal);
+        if (hintGame !== game) return;
+        startBotTurn(report(result, ctx));
+        if (result.kind !== "invalid") return;
+      }
     });
     command("pass", (_args, ctx) => startBotTurn(report(game.pass(), ctx)));
     command("undo", (_args, ctx) => void report(game.undo(), ctx));

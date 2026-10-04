@@ -5,7 +5,7 @@ import type { UsageTotals } from "./llm-client.ts";
 
 /** 斜杠命令：名字 → [参数提示, 说明]。注册命令与 /help 共用这一张表。 */
 export const COMMANDS: Record<string, [args: string, description: string]> = {
-  hint: ["", "求助：给出候选成语，本轮 0 分并转 Bot"],
+  hint: ["", "求助：选择候选作答，正常计分，成功入账消耗 1 次"],
   pass: ["", `跳过本轮：${PASS_PENALTY} 分并转 Bot`],
   undo: ["", "悔棋：撤销上一整轮"],
   difficulty: ["<easy|normal|hard|extreme>", "切换难度"],
@@ -34,7 +34,7 @@ export function boardLines(game: IdiomGame): string[] {
     if (left !== null) clock = left > 0 ? ` · ⏱ ${left}s` : " · ⏱ 已超时（作答按跳过计）";
   }
   const lines = [
-    `🀄 成语接龙 · 第 ${round}/${game.maxRounds} 轮 · ${MODE_LABELS[game.mode]}${clock}`,
+    `🀄 成语接龙 · 第 ${round}/${game.maxRounds} 轮 · ${MODE_LABELS[game.mode]} · 剩余提示 ${game.hintsRemaining} 次${clock}`,
     `你 ${game.scores.human} : ${game.scores.bot} Bot` + (game.gameOver || game.awaitingBot ? "" : ` · 请接「${game.lastChar}」`),
   ];
   const chain = game.chain.turns.map((t) => t.idiom);
@@ -54,7 +54,7 @@ export function describeHumanMove(move: HumanMove): string {
     case "timeout":
       return `超时，按跳过计（${signed(move.gained)}）`;
     case "hint":
-      return "你使用了提示（本轮 0 分）";
+      return `你：${move.idiom}（${signed(move.gained)}，使用提示）`;
   }
 }
 
@@ -91,6 +91,7 @@ export function statusLines(game: IdiomGame, usage?: UsageTotals): string[] {
     `  Bot：×${bot.multiplier} · ${bot.allowHomophone ? "允许" : "不允许"}谐音 · ${bot.dictLevel} 词库`,
     `轮次：${Math.min(game.currentRound, game.maxRounds)}/${game.maxRounds}${game.gameOver ? "（已结束）" : ""}`,
     `倒计时：${game.timerSeconds === 0 ? "关闭" : `${game.timerSeconds} 秒，本轮剩 ${left ?? 0} 秒`}`,
+    `剩余提示 ${game.hintsRemaining} 次`,
     `比分：你 ${game.scores.human} : ${game.scores.bot} Bot`,
     `接龙链（${game.chain.turns.length}）：${game.chain.turns.map((t) => t.idiom).join(" → ") || "（空）"}`,
   ];
@@ -113,6 +114,9 @@ export function helpLines(): string[] {
   return [
     "规则：用上一个成语的末字开头接龙。原字 2 分、谐音 1 分（看难度），再乘难度倍率；至少 4 字，本局不可重复。",
     "直接输入成语作答；Bot 由模型扮演，只能通过 submit_idiom 工具出词，和你用同一个裁判。",
+    "提示每局上限：简单 3 / 普通 2 / 困难 1 / 极限 0；用完后 /hint 不调用模型。",
+    "提示选择：↑↓/数字选择、回车确认、Esc 取消；候选经同一裁判，取消或无效不扣次数，超时按跳过处理。",
+    "撤销整轮退回提示次数，重开重置；换难度按新上限减本局已用次数（最少 0）。",
     "命令（都不花 token，/hint 除外）：",
     ...Object.entries(COMMANDS).map(([name, [args, desc]]) => `  /${name}${args ? ` ${args}` : ""} — ${desc}`),
     "  /quit — 退出（Pi 内置）",

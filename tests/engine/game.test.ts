@@ -206,13 +206,79 @@ test("跳过扣 1 分并转 Bot", async () => {
   expect([game.lastChar, game.currentRound]).toEqual(["成", 2]);
 });
 
-test("提示给出候选、本轮 0 分并转 Bot", async () => {
+test("提示只返回候选，取消不改变回合或次数", async () => {
   const { game } = make({ hints: [{ candidates: ["心想事成", "心旷神怡"] }] });
-  const started = expectKind(await game.hint(), "bot_turn");
-  expect(started.hints).toEqual(["心想事成", "心旷神怡"]);
-  expect(started.human.kind).toBe("hint");
-  await game.submitBot("心花怒放");
-  expect(game.scores).toEqual({ human: 0, bot: 2 });
+  expect(expectKind(await game.hint(), "hints").hints).toEqual(["心想事成", "心旷神怡"]);
+  expect(game.awaitingBot).toBe(false);
+  expect(game.hintsRemaining).toBe(2);
+  expect(game.scores.human).toBe(0);
+});
+
+for (const [mode, limit] of [["easy", 3], ["normal", 2], ["hard", 1], ["extreme", 0]] as const) {
+  test(`${mode} 提示上限 ${limit}，用完不调用模型`, async () => {
+    const { game, llm } = make();
+    game.setMode(mode);
+    expect(game.hintsRemaining).toBe(limit);
+    for (const idiom of ["心想事成", "成竹在胸", "胸有成竹"].slice(0, limit)) {
+      expectKind(await game.submitHint(idiom), "bot_turn");
+      game.forfeitBot("test");
+    }
+    const calls = llm.calls.length;
+    expect(expectKind(await game.hint(), "info").message).toBe("本局提示次数已用完");
+    expectKind(await game.submitHint("竹报平安"), "info");
+    expect(llm.calls.length).toBe(calls);
+  });
+}
+
+for (const mode of ["easy", "normal", "hard"] as const) {
+  for (const idiom of ["心想事成", "新官上任"]) {
+    test(`${mode} 提示选词 ${idiom} 与手打同裁判、同计分`, async () => {
+      const manual = make();
+      const hinted = make();
+      manual.game.setMode(mode);
+      hinted.game.setMode(mode);
+      const expected = await manual.game.submitHuman(idiom);
+      const out = await hinted.game.submitHint(idiom);
+      expect(out.kind).toBe(expected.kind);
+      expect(hinted.game.scores).toEqual(manual.game.scores);
+      expect(hinted.llm.calls).toEqual(manual.llm.calls);
+      if (out.kind === "bot_turn") {
+        expect(out.human.gained).toBe((idiom === "心想事成" ? 2 : 1) * (mode === "easy" ? 2 : 1));
+        expect(out.prompt).toContain(`「${idiom.at(-1)}」`);
+      }
+    });
+  }
+}
+
+test("无效提示不扣次数，undo 退回，换难度按已用次数计算，restart 重置", async () => {
+  const { game } = make({ judge: (idiom) => idiom !== "心花乱飞" });
+  expectKind(await game.submitHint("心花乱飞"), "invalid");
+  expect(game.hintsRemaining).toBe(2);
+  await game.submitHint("心想事成");
+  game.forfeitBot("test");
+  expect(game.hintsRemaining).toBe(1);
+  game.setMode("easy");
+  expect(game.hintsRemaining).toBe(2);
+  game.setMode("hard");
+  expect(game.hintsRemaining).toBe(0);
+  game.setMode("extreme");
+  expect(game.hintsRemaining).toBe(0);
+  game.undo();
+  game.setMode("normal");
+  expect(game.hintsRemaining).toBe(2);
+  await game.submitHint("心想事成");
+  game.forfeitBot("test");
+  game.restart();
+  expect(game.hintsRemaining).toBe(2);
+});
+
+test("超时选择按跳过处理，不扣提示次数，也不调用裁判", async () => {
+  const { game, clock, llm } = make();
+  clock.now += 31;
+  expect(expectKind(await game.submitHint("心想事成"), "bot_turn").human.kind).toBe("timeout");
+  expect(game.hintsRemaining).toBe(2);
+  expect(game.scores.human).toBe(-1);
+  expect(llm.calls).toEqual([]);
 });
 
 test("拿不到提示不消耗本轮", async () => {
