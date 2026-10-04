@@ -1,4 +1,5 @@
-import { beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BOT_SYSTEM_PROMPT, SUBMIT_TOOL } from "../../src/engine/prompts.ts";
 import { createIdiomExtension } from "../../src/extension/index.ts";
 import { FakeClock, FakeLLM, type ScriptItem } from "../fakes.ts";
@@ -7,15 +8,17 @@ import { FakePi } from "./fake-pi.ts";
 let pi: FakePi;
 let llm: FakeLLM;
 
-async function setup(opts: { hints?: ScriptItem[]; judge?: (idiom: string) => boolean } = {}) {
-  pi = new FakePi();
-  llm = new FakeLLM(opts);
+async function setup(opts: { hints?: ScriptItem[]; judge?: (idiom: string) => boolean; mode?: ExtensionContext["mode"] } = {}) {
+  await pi?.emit("session_shutdown");
+  pi = new FakePi(opts.mode);
+  llm = new FakeLLM({ hints: opts.hints, judge: opts.judge });
   const clock = new FakeClock();
   createIdiomExtension({ llm, clock: clock.read })(pi.api);
   await pi.emit("session_start", { reason: "startup" });
 }
 
 beforeEach(() => setup());
+afterEach(() => pi.emit("session_shutdown"));
 
 // ---------- 启动 ----------
 
@@ -234,4 +237,107 @@ test("/chain 无 UI 时仍追加卡片，0 token 且不发送模型消息", asyn
   }]);
   expect(llm.calls).toEqual([]);
   expect(pi.userMessages).toEqual([]);
+});
+
+const hintCandidates = ["心想事成", "心旷神怡"];
+
+async function hintPanel() {
+  const call = pi.customCalls[0]!;
+  // 静态面板不使用 TUI、主题或快捷键；只需驱动真实 factory 和 done。
+  type Args = Parameters<typeof call.factory>;
+  return await call.factory({} as Args[0], {} as Args[1], {} as Args[2], call.done);
+}
+
+test("TUI /hint 用 overlay 逐行显示，关闭前即启动 Bot，任意键关闭不改账", async () => {
+  await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+  await pi.command("hint");
+  expect(pi.customCalls).toHaveLength(1);
+  expect(pi.customCalls[0]!.options).toEqual({ overlay: true });
+  expect(pi.customCalls[0]!.completed).toBe(false);
+  expect(pi.entries).toEqual([]);
+  expect(llm.roles()).toEqual(["hints"]);
+  expect(pi.userMessages).toHaveLength(1);
+  expect(pi.userMessages[0]).toContain("「心」");
+  const panel = await hintPanel();
+  expect(panel.render(80)).toEqual(["💡 提示", ...hintCandidates, "本轮 0 分，Bot 接龙中…"]);
+  const board = pi.widgets.get("idiom-board");
+  panel.handleInput!("x");
+  expect(pi.customCalls[0]!.completed).toBe(true);
+  expect(pi.widgets.get("idiom-board")).toEqual(board);
+  expect(llm.roles()).toEqual(["hints"]);
+  expect(pi.userMessages).toHaveLength(1);
+  expect(pi.entries).toEqual([]);
+});
+
+for (const mode of ["rpc", "json", "print"] as const) {
+  test(`${mode} /hint 保留原卡片`, async () => {
+    await setup({ mode, hints: [{ candidates: hintCandidates }] });
+    await pi.command("hint");
+    expect(pi.customCalls).toEqual([]);
+    expect(pi.entries).toEqual([{
+      customType: "idiom-card",
+      data: { title: undefined, lines: ["提示：心想事成、心旷神怡", "你使用了提示（本轮 0 分）"] },
+    }]);
+    expect(llm.roles()).toEqual(["hints"]);
+    expect(pi.userMessages).toHaveLength(1);
+  });
+}
+
+test("无 UI 的 /hint 仍写原卡片", async () => {
+  await setup({ hints: [{ candidates: hintCandidates }] });
+  Object.assign(pi.ctx, { hasUI: false });
+  await pi.command("hint");
+  expect(pi.customCalls).toEqual([]);
+  expect(pi.cards()).toEqual([["提示：心想事成、心旷神怡", "你使用了提示（本轮 0 分）"]]);
+  expect(llm.roles()).toEqual(["hints"]);
+  expect(pi.userMessages).toHaveLength(1);
+});
+
+test("提示 overlay 未关闭时照常挡住人类和重复提示，Bot 结算且人类 0 分", async () => {
+  await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+  await pi.command("hint");
+  expect((await pi.input("心想事成")).action).toBe("handled");
+  expect(pi.lastNotice()).toContain("Bot 正在接龙");
+  await pi.command("hint");
+  expect(pi.lastNotice()).toContain("Bot 正在接龙");
+  expect(llm.roles()).toEqual(["hints"]);
+  expect(pi.customCalls).toHaveLength(1);
+  expect(pi.customCalls[0]!.completed).toBe(false);
+  expect((await pi.submit("心想事成")).terminate).toBe(true);
+  expect(pi.cards()[0]).toContain("你使用了提示（本轮 0 分）");
+  expect(pi.cards()[0]).toContain("Bot：心想事成（+2）");
+  expect(pi.widgets.get("idiom-board")?.[1]).toContain("你 0 : 2 Bot");
+  const board = pi.widgets.get("idiom-board");
+  (await hintPanel()).handleInput!("x");
+  expect(pi.widgets.get("idiom-board")).toEqual(board);
+  expect(pi.cards()).toHaveLength(1);
+  expect(pi.userMessages).toHaveLength(1);
+  expect(llm.roles()).toEqual(["hints", "judge"]);
+});
+
+for (const [label, item] of [
+  ["空候选", { candidates: [] }],
+  ["无效候选", { candidates: ["一马当先", "心"] }],
+  ["模型异常", new Error("offline failure")],
+] as const) {
+  test(`TUI /hint ${label} 不显示 overlay，不开回合`, async () => {
+    await setup({ mode: "tui", hints: [item] });
+    await pi.command("hint");
+    expect(pi.lastNotice()).toContain("暂时没拿到可用的提示");
+    expect(pi.customCalls).toEqual([]);
+    expect(pi.entries).toEqual([]);
+    expect(pi.userMessages).toEqual([]);
+    expect(llm.roles()).toEqual(["hints"]);
+  });
+}
+
+test("overlay 展示失败只通知，不阻塞或重复启动 Bot", async () => {
+  await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+  await pi.command("hint");
+  pi.customCalls[0]!.reject(new Error("offline failure"));
+  await Promise.resolve();
+  expect(pi.lastNotice()).toContain("提示面板显示失败");
+  expect(pi.notices.at(-1)?.type).toBe("error");
+  expect(llm.roles()).toEqual(["hints"]);
+  expect(pi.userMessages).toHaveLength(1);
 });

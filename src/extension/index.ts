@@ -20,6 +20,7 @@ import type { LLMClient } from "../engine/llm.ts";
 import { BOT_SYSTEM_PROMPT, NUDGE_MESSAGE, SUBMIT_TOOL, buildRoundEndMessage } from "../engine/prompts.ts";
 import { currentRoundOnly } from "./context-filter.ts";
 import { PiLLMClient } from "./llm-client.ts";
+import { createPanel } from "./panel.ts";
 import * as view from "./view.ts";
 
 const WIDGET_KEY = "idiom-board";
@@ -96,8 +97,18 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
           return undefined;
         case "bot_turn":
           nudges = 0;
-          if (out.hints.length > 0) card([`提示：${out.hints.join("、")}`, view.describeHumanMove(out.human)]);
-          else notify(ctx, view.describeHumanMove(out.human));
+          if (out.hints.length > 0) {
+            if (ctx.mode === "tui") {
+              // 只展示，不等待面板关闭：Bot 回合照常开始。
+              void ctx.ui.custom<void>(
+                (_tui, _theme, _keybindings, done) =>
+                  createPanel("💡 提示", [...out.hints, "本轮 0 分，Bot 接龙中…"], () => done()),
+                { overlay: true },
+              ).catch(() => notify(ctx, "提示面板显示失败。", "error"));
+            } else {
+              card([`提示：${out.hints.join("、")}`, view.describeHumanMove(out.human)]);
+            }
+          } else notify(ctx, view.describeHumanMove(out.human));
           refresh(ctx);
           return out.prompt;
       }

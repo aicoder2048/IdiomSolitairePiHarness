@@ -6,6 +6,15 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type Handler = (event: any, ctx: ExtensionContext) => unknown;
+type CustomArgs = Parameters<ExtensionContext["ui"]["custom"]>;
+
+interface CustomCall {
+  factory: CustomArgs[0];
+  options: CustomArgs[1];
+  done: (result?: unknown) => void;
+  reject: (reason: Error) => void;
+  completed: boolean;
+}
 
 export interface Notice {
   message: string;
@@ -21,6 +30,11 @@ export class FakePi {
   readonly notices: Notice[] = [];
   readonly widgets = new Map<string, string[] | undefined>();
   activeTools: string[] = [];
+  readonly customCalls: CustomCall[] = [];
+
+  constructor(mode: ExtensionContext["mode"] = "rpc") {
+    this.ctx.mode = mode;
+  }
 
   readonly api = {
     on: (event: string, handler: Handler) => {
@@ -45,6 +59,16 @@ export class FakePi {
       notify: (message: string, type = "info") => this.notices.push({ message, type }),
       setWidget: (key: string, lines: string[] | undefined) => this.widgets.set(key, lines),
       setStatus: () => {},
+      custom: (factory: CustomArgs[0], options: CustomArgs[1]) => new Promise((resolve, reject) => {
+        const call: CustomCall = {
+          factory, options, reject, completed: false,
+          done: (result) => {
+            call.completed = true;
+            resolve(result);
+          },
+        };
+        this.customCalls.push(call);
+      }),
     },
   } as unknown as ExtensionContext;
 
