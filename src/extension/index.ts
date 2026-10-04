@@ -12,6 +12,7 @@
  * 写账只发生在 input 处理器、命令和工具的 execute() 里，都是确定性代码。
  */
 
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Box, Text, type OverlayOptions } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -21,6 +22,7 @@ import { BOT_SYSTEM_PROMPT, NUDGE_MESSAGE, SUBMIT_TOOL, buildRoundEndMessage } f
 import { currentRoundOnly } from "./context-filter.ts";
 import { PiLLMClient } from "./llm-client.ts";
 import { createDismissiblePanel, createHintSelector, hintFooter, panelWidth, type PanelContent } from "./panel.ts";
+import { readRecords, saveRecord } from "./records-store.ts";
 import * as view from "./view.ts";
 
 const WIDGET_KEY = "idiom-board";
@@ -48,6 +50,7 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     const newGame = () => new IdiomGame({ llm, clock: options.clock, ...options.game });
 
     let game = newGame();
+    let gameId = randomUUID();
     let nudges = 0;
     let ticker: ReturnType<typeof setInterval> | undefined;
 
@@ -191,9 +194,22 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
       }
     }
 
+    function persistCompletedGame(ctx: ExtensionContext): void {
+      if (!game.gameOver || game.awaitingBot || game.roundLog.length === 0) return;
+      try {
+        saveRecord({ id: gameId, endedAt: new Date().toISOString(), mode: game.mode,
+          rounds: game.roundLog.length, scores: { ...game.scores }, winner: game.winner() });
+      } catch (error) {
+        notify(ctx, `战绩保存失败，游戏可继续。${String(error)}`, "warning");
+      }
+    }
+
     function settle(res: Extract<BotSubmitResult, { kind: "round" }>, ctx: ExtensionContext): void {
       card(view.roundCardLines(res.record));
-      if (res.gameOver) void presentFinal(view.finalLines(game), ctx);
+      if (res.gameOver) {
+        persistCompletedGame(ctx);
+        void presentFinal(view.finalLines(game), ctx);
+      }
       refresh(ctx);
     }
 
@@ -209,6 +225,7 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
       piLLM?.bind(ctx);
       pendingHints = [];
       game = newGame();
+      gameId = randomUUID();
       nudges = 0;
       pi.setActiveTools([SUBMIT_TOOL]); // Bot 只有这一个工具：护栏写在代码里，不靠启动参数
       refresh(ctx);
@@ -364,12 +381,25 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     command("pass", (_args, ctx) => startBotTurn(report(game.pass(), ctx)));
     command("undo", (_args, ctx) => void report(game.undo(), ctx));
     command("difficulty", (args, ctx) => void report(game.setMode(args), ctx), MODES);
-    command("rounds", (args, ctx) => void report(game.setRounds(args), ctx), ["5", "9", "15", "20"]);
+    command("rounds", (args, ctx) => {
+      const wasOver = game.gameOver;
+      const out = game.setRounds(args);
+      report(out, ctx);
+      if (out.kind === "command" && !wasOver) persistCompletedGame(ctx);
+    }, ["5", "9", "15", "20"]);
     command("timer", (args, ctx) => void report(game.setTimer(args), ctx), ["0", "30", "60", "120"]);
-    command("restart", (args, ctx) => void report(game.restart(args), ctx));
+    command("restart", (args, ctx) => {
+      const out = game.restart(args);
+      if (out.kind === "command") gameId = randomUUID();
+      report(out, ctx);
+    });
     command("status", (_args, ctx) => presentStatus(view.statusLines(game, piLLM?.totals), ctx));
     command("chain", () => card(view.chainLines(game), "📜 接龙链"));
     command("help", () => card(view.helpLines(), "📖 成语接龙"));
+    command("records", (_args, ctx) => {
+      try { card(view.recordsLines(readRecords()), "📚 战绩"); }
+      catch (error) { notify(ctx, `战绩读取失败，游戏可继续。${String(error)}`, "warning"); }
+    });
   };
 }
 

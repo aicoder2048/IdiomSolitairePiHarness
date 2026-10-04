@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { IdiomGame } from "../../src/engine/game.ts";
-import { boardLines, chainLines, finalLines, helpLines, statusLines } from "../../src/extension/view.ts";
+import { boardLines, chainLines, finalLines, helpLines, recordsLines, statusLines } from "../../src/extension/view.ts";
 import { FakeClock, FakeLLM } from "../fakes.ts";
 
 function make(timerSeconds = 30) {
@@ -57,7 +57,7 @@ test("状态面板含难度配置与用量", () => {
 
 test("帮助列出全部命令", () => {
   const text = helpLines().join("\n");
-  for (const name of ["/hint", "/pass", "/undo", "/difficulty", "/rounds", "/timer", "/restart", "/status", "/chain"]) {
+  for (const name of ["/hint", "/pass", "/undo", "/difficulty", "/rounds", "/timer", "/restart", "/status", "/chain", "/records"]) {
     expect(text).toContain(name);
   }
 });
@@ -171,3 +171,32 @@ for (const forfeit of [false, true]) {
     ]);
   });
 }
+
+
+test("战绩卡片：空记录与胜负平、中文难度、负分、单小数胜率", () => {
+  expect(recordsLines([])).toEqual(["还没有战绩"]);
+  const base = { endedAt: "2026-01-01T00:00:00.000Z", rounds: 1 };
+  expect(recordsLines([
+    { ...base, id: "a", mode: "easy", scores: { human: 4, bot: 2 }, winner: "human" },
+    { ...base, id: "b", mode: "normal", scores: { human: -1, bot: 2 }, winner: "bot" },
+    { ...base, id: "c", mode: "extreme", scores: { human: 0, bot: 0 }, winner: "draw" },
+  ])).toEqual([
+    "总场次：3 · 胜 1 / 负 1 / 平 1", "胜率：33.3%", "最近 10 局：",
+    "2026-01-01 · 简单 · 你 4 : 2 Bot · 胜",
+    "2026-01-01 · 普通 · 你 -1 : 2 Bot · 负",
+    "2026-01-01 · 极限 · 你 0 : 0 Bot · 平",
+  ]);
+});
+
+test("战绩卡片：全量统计，只显示最近十局，排序不修改输入", () => {
+  const records = [3, 1, 12, 2, 5, 11, 4, 10, 8, 7, 6, 9].map((day) => ({
+    id: String(day), endedAt: `2026-01-${String(day).padStart(2, "0")}T00:00:00.000Z`,
+    mode: "hard" as const, rounds: 1, scores: { human: 2, bot: 2 }, winner: "draw" as const,
+  }));
+  const before = structuredClone(records);
+  const lines = recordsLines(records);
+  expect(lines.slice(0, 3)).toEqual(["总场次：12 · 胜 0 / 负 0 / 平 12", "胜率：0.0%", "最近 10 局："]);
+  expect(lines.slice(3)).toEqual(Array.from({ length: 10 }, (_, i) =>
+    `2026-01-${String(12 - i).padStart(2, "0")} · 困难 · 你 2 : 2 Bot · 平`));
+  expect(records).toEqual(before);
+});
