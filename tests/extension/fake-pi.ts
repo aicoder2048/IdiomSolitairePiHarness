@@ -3,7 +3,13 @@
  * 让测试按 Pi 的事件顺序（input → before_agent_start → context → 工具 → agent_before_settle）手动驱动。
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
+
+export const fakeTheme = {
+  fg: (_color: string, text: string) => `\x1b[36m${text}\x1b[39m`,
+  bg: (_color: string, text: string) => `\x1b[48;5;236m${text}\x1b[49m`,
+  bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
+} as Theme;
 
 type Handler = (event: any, ctx: ExtensionContext) => unknown;
 type CustomArgs = Parameters<ExtensionContext["ui"]["custom"]>;
@@ -31,6 +37,11 @@ export class FakePi {
   readonly widgets = new Map<string, string[] | undefined>();
   activeTools: string[] = [];
   readonly customCalls: CustomCall[] = [];
+  readonly terminalListeners = new Set<(data: string) => unknown>();
+
+  terminalInput(data: string) {
+    return [...this.terminalListeners].map((listener) => listener(data));
+  }
 
   constructor(mode: ExtensionContext["mode"] = "rpc") {
     this.ctx.mode = mode;
@@ -59,6 +70,10 @@ export class FakePi {
       notify: (message: string, type = "info") => this.notices.push({ message, type }),
       setWidget: (key: string, lines: string[] | undefined) => this.widgets.set(key, lines),
       setStatus: () => {},
+      onTerminalInput: (handler: (data: string) => unknown) => {
+        this.terminalListeners.add(handler);
+        return () => { this.terminalListeners.delete(handler); };
+      },
       custom: (factory: CustomArgs[0], options: CustomArgs[1]) => new Promise((resolve, reject) => {
         const call: CustomCall = {
           factory, options, reject, completed: false,

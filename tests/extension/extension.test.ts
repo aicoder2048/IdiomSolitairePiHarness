@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BOT_SYSTEM_PROMPT, SUBMIT_TOOL } from "../../src/engine/prompts.ts";
 import { createIdiomExtension } from "../../src/extension/index.ts";
 import { FakeClock, FakeLLM, type ScriptItem } from "../fakes.ts";
-import { FakePi } from "./fake-pi.ts";
+import { fakeTheme, FakePi } from "./fake-pi.ts";
 
 let pi: FakePi;
 let llm: FakeLLM;
@@ -241,32 +241,103 @@ test("/chain 无 UI 时仍追加卡片，0 token 且不发送模型消息", asyn
 
 const hintCandidates = ["心想事成", "心旷神怡"];
 
-async function hintPanel() {
-  const call = pi.customCalls[0]!;
-  // 静态面板不使用 TUI、主题或快捷键；只需驱动真实 factory 和 done。
-  type Args = Parameters<typeof call.factory>;
-  return await call.factory({} as Args[0], {} as Args[1], {} as Args[2], call.done);
+function hintOptions() {
+  const options = pi.customCalls[0]!.options!.overlayOptions!;
+  return typeof options === "function" ? options() : options;
 }
 
-test("TUI /hint 用 overlay 逐行显示，关闭前即启动 Bot，任意键关闭不改账", async () => {
+async function hintPanel(done = pi.customCalls[0]!.done, documentRows = 30, mode = "regular") {
+  const call = pi.customCalls[0]!;
+  type Args = Parameters<typeof call.factory>;
+  return await call.factory({
+    terminal: { columns: 80, rows: 30 },
+    mode,
+    children: [
+      { render: () => Array(documentRows).fill("chat") },
+      { render: () => Array(8).fill("board/editor/footer") },
+    ],
+  } as unknown as Args[0], fakeTheme, {
+    matches: (data: string) => data === "\r",
+  } as unknown as Args[2], done);
+}
+
+test("TUI /hint 居中非抢焦点面板，输入前已启动 Bot，普通按键不关闭", async () => {
   await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
   await pi.command("hint");
+  const panel = await hintPanel();
   expect(pi.customCalls).toHaveLength(1);
-  expect(pi.customCalls[0]!.options).toEqual({ overlay: true });
+  expect(pi.customCalls[0]!.options!.overlay).toBe(true);
+  expect(hintOptions()).toMatchObject({ anchor: "center", width: 28, nonCapturing: true, margin: 1, maxHeight: "50%" });
   expect(pi.customCalls[0]!.completed).toBe(false);
   expect(pi.entries).toEqual([]);
   expect(llm.roles()).toEqual(["hints"]);
   expect(pi.userMessages).toHaveLength(1);
-  expect(pi.userMessages[0]).toContain("「心」");
-  const panel = await hintPanel();
-  expect(panel.render(80)).toEqual(["💡 提示", ...hintCandidates, "本轮 0 分，Bot 接龙中…"]);
+  expect(panel.render(28).join("\n")).toContain("1. 心想事成");
+  expect(panel.handleInput).toBeUndefined();
+  expect(pi.terminalInput("x")).toEqual([undefined]);
+  expect(pi.customCalls[0]!.completed).toBe(false);
+  await pi.input("心想事成", "extension");
+  expect(pi.customCalls[0]!.completed).toBe(false);
   const board = pi.widgets.get("idiom-board");
-  panel.handleInput!("x");
+  await pi.input("心想事成");
   expect(pi.customCalls[0]!.completed).toBe(true);
   expect(pi.widgets.get("idiom-board")).toEqual(board);
   expect(llm.roles()).toEqual(["hints"]);
   expect(pi.userMessages).toHaveLength(1);
-  expect(pi.entries).toEqual([]);
+  expect(pi.terminalListeners.size).toBe(0);
+});
+
+for (const name of ["hint", "pass", "undo", "difficulty", "rounds", "timer", "restart", "status", "chain", "help"]) {
+  test(`/${name} 关闭已有提示面板`, async () => {
+    await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+    await pi.command("hint");
+    await hintPanel();
+    const calls = llm.calls.length;
+    await pi.command(name);
+    expect(pi.customCalls[0]!.completed).toBe(true);
+    expect(llm.calls).toHaveLength(calls);
+  });
+}
+
+test("原生命令的提交键也关闭面板，不吞按键", async () => {
+  await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+  await pi.command("hint");
+  await hintPanel();
+  expect(pi.terminalInput("\r")).toEqual([undefined]);
+  expect(pi.customCalls[0]!.completed).toBe(true);
+});
+
+test("30 秒后通过 done 关闭，关闭异常不影响后续输入", async () => {
+  await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+  const timer = spyOn(globalThis, "setTimeout");
+  try {
+    await pi.command("hint");
+    let closed = 0;
+    await hintPanel(() => { closed++; throw new Error("close failed"); });
+    const expiry = timer.mock.calls.find((call) => call[1] === 30_000)!;
+    expect(expiry).toBeDefined();
+    expect(() => (expiry[0] as () => void)()).not.toThrow();
+    expect(closed).toBe(1);
+    expect((await pi.input("心想事成")).action).toBe("handled");
+    expect(closed).toBe(1);
+    expect(pi.userMessages).toHaveLength(1);
+    expect(pi.terminalListeners.size).toBe(0);
+  } finally { timer.mockRestore(); }
+});
+
+test("终端缩小时遵守 60% 上限，空间不足不遮挡仪表盘/输入框", async () => {
+  await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+  await pi.command("hint");
+  await hintPanel();
+  const options = hintOptions();
+  expect(options.visible!(80, 30)).toBe(true);
+  expect(options.visible!(30, 30)).toBe(true);
+  expect(options.width).toBe(18);
+  expect(options.visible!(80, 20)).toBe(true);
+  const height = 6;
+  const row = 1 + Math.floor((20 - 2 - height) / 2) + options.offsetY!;
+  expect(row + height).toBeLessThan(20 - 8);
+  expect(options.visible!(80, 10)).toBe(false);
 });
 
 for (const mode of ["rpc", "json", "print"] as const) {
@@ -296,19 +367,20 @@ test("无 UI 的 /hint 仍写原卡片", async () => {
 test("提示 overlay 未关闭时照常挡住人类和重复提示，Bot 结算且人类 0 分", async () => {
   await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
   await pi.command("hint");
+  await hintPanel();
   expect((await pi.input("心想事成")).action).toBe("handled");
   expect(pi.lastNotice()).toContain("Bot 正在接龙");
   await pi.command("hint");
   expect(pi.lastNotice()).toContain("Bot 正在接龙");
   expect(llm.roles()).toEqual(["hints"]);
   expect(pi.customCalls).toHaveLength(1);
-  expect(pi.customCalls[0]!.completed).toBe(false);
+  expect(pi.customCalls[0]!.completed).toBe(true);
   expect((await pi.submit("心想事成")).terminate).toBe(true);
   expect(pi.cards()[0]).toContain("你使用了提示（本轮 0 分）");
   expect(pi.cards()[0]).toContain("Bot：心想事成（+2）");
   expect(pi.widgets.get("idiom-board")?.[1]).toContain("你 0 : 2 Bot");
   const board = pi.widgets.get("idiom-board");
-  (await hintPanel()).handleInput!("x");
+  await pi.input("", "extension");
   expect(pi.widgets.get("idiom-board")).toEqual(board);
   expect(pi.cards()).toHaveLength(1);
   expect(pi.userMessages).toHaveLength(1);
@@ -340,4 +412,43 @@ test("overlay 展示失败只通知，不阻塞或重复启动 Bot", async () =>
   expect(pi.notices.at(-1)?.type).toBe("error");
   expect(llm.roles()).toEqual(["hints"]);
   expect(pi.userMessages).toHaveLength(1);
+});
+
+for (const mode of ["regular", "fullscreen"]) {
+  test(`${mode} 短对话也不能遮挡底部控件`, async () => {
+    await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+    await pi.command("hint");
+    await hintPanel(undefined, 4, mode);
+    expect(hintOptions().visible!(80, 30)).toBe(mode === "fullscreen");
+  });
+}
+
+test("custom 同步抛错也不阻止 Bot 开回合", async () => {
+  await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+  const custom = spyOn(pi.ctx.ui, "custom").mockImplementation(() => { throw new Error("display failed"); });
+  try {
+    await pi.command("hint");
+    expect(pi.lastNotice()).toContain("提示面板显示失败");
+    expect(pi.userMessages).toHaveLength(1);
+    expect((await pi.submit("心想事成")).terminate).toBe(true);
+  } finally { custom.mockRestore(); }
+});
+
+test("factory 延迟执行时已关闭的面板不重开，也不再安装键盘监听", async () => {
+  await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+  await pi.command("hint");
+  await pi.command("status");
+  await hintPanel();
+  expect(pi.customCalls[0]!.completed).toBe(true);
+  expect(hintOptions().visible!(80, 30)).toBe(false);
+  expect(pi.terminalListeners.size).toBe(0);
+});
+
+test("session_shutdown 通过 done 关闭面板并移除监听", async () => {
+  await setup({ mode: "tui", hints: [{ candidates: hintCandidates }] });
+  await pi.command("hint");
+  await hintPanel();
+  await pi.emit("session_shutdown");
+  expect(pi.customCalls[0]!.completed).toBe(true);
+  expect(pi.terminalListeners.size).toBe(0);
 });
