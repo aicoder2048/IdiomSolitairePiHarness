@@ -249,11 +249,11 @@ function hintOptions() {
   return typeof options === "function" ? options() : options;
 }
 
-async function hintPanel(index = 0) {
+async function hintPanel(index = 0, columns = 80) {
   const call = pi.customCalls[index]!;
   type Args = Parameters<typeof call.factory>;
   return await call.factory({
-    terminal: { columns: 80, rows: 30 }, requestRender() {},
+    terminal: { columns, rows: 30 }, requestRender() {},
   } as unknown as Args[0], fakeTheme, {} as Args[2], call.done);
 }
 
@@ -472,16 +472,23 @@ test("TUI 结算非阻塞、相同文字、任意键关闭且不增加模型消�
   expect(result.terminate).toBe(true);
   expect(result.content[0].text).not.toContain("🏁 对局结束");
   expect(pi.customCalls).toHaveLength(1);
-  expect(pi.customCalls[0]!.options).toEqual({ overlay: true,
-    overlayOptions: { anchor: "center", width: "100%", margin: 1 } });
+  expect(pi.customCalls[0]!.options!.overlay).toBe(true);
   expect(pi.customCalls[0]!.completed).toBe(false);
   expect(pi.cards()).toHaveLength(1);
   expect(finalCards()).toEqual([]);
   const calls = llm.calls.length;
   expect(calls).toBe(2); // 只有人类与 Bot 的裁判调用
-  const panel = await hintPanel();
-  const text = panel.render(160).map(stripTerminalSequences).join("\n");
+  const panel = await hintPanel(0, 120);
+  const options = hintOptions();
+  const contentWidth = Math.max(40, ...drawSummary.map((line) => visibleWidth(line) + 4));
+  expect(options).toMatchObject({ anchor: "center", width: contentWidth, margin: 1 });
+  expect(contentWidth).toBeLessThanOrEqual(72); // 120 列的 60%，不是铺满屏幕
+  const text = panel.render(options.width as number).map(stripTerminalSequences).join("\n");
   for (const line of drawSummary) expect(text).toContain(line);
+  expect(options.visible!(80, 30)).toBe(true);
+  expect(options.width).toBe(Math.min(48, contentWidth));
+  expect(options.visible!(200, 30)).toBe(true);
+  expect(options.width).toBe(contentWidth);
   panel.handleInput!("x");
   await flush();
   expect(pi.customCalls[0]!.completed).toBe(true);

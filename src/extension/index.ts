@@ -114,12 +114,19 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
         card(lines);
         return;
       }
+      const overlayOptions: OverlayOptions = { anchor: "center", margin: 1 };
       try {
-        await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => createDismissiblePanel({
-          title: lines[0]!, lines: lines.slice(1, -1), footer: lines.at(-1), theme,
-        }, () => done()), {
-          overlay: true, overlayOptions: { anchor: "center", width: "100%", margin: 1 },
-        });
+        await ctx.ui.custom<void>((tui, theme, _keybindings, done) => {
+          const content: PanelContent = {
+            title: lines[0]!, lines: lines.slice(1, -1), footer: lines.at(-1), theme,
+          };
+          overlayOptions.width = panelWidth(content, tui.terminal.columns);
+          overlayOptions.visible = (columns) => {
+            overlayOptions.width = panelWidth(content, columns);
+            return true;
+          };
+          return createDismissiblePanel(content, () => done());
+        }, { overlay: true, overlayOptions });
       } catch {
         card(lines);
       }
