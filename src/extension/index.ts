@@ -20,7 +20,7 @@ import type { LLMClient } from "../engine/llm.ts";
 import { BOT_SYSTEM_PROMPT, NUDGE_MESSAGE, SUBMIT_TOOL, buildRoundEndMessage } from "../engine/prompts.ts";
 import { currentRoundOnly } from "./context-filter.ts";
 import { PiLLMClient } from "./llm-client.ts";
-import { createPanel, panelWidth, type PanelContent } from "./panel.ts";
+import { createHintSelector, hintFooter, panelWidth, type PanelContent } from "./panel.ts";
 import * as view from "./view.ts";
 
 const WIDGET_KEY = "idiom-board";
@@ -52,79 +52,43 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     let ticker: ReturnType<typeof setInterval> | undefined;
 
     let dismissHint: (() => void) | undefined;
+    let hintEpoch = 0;
+    let pendingHints: string[] = [];
 
     function closeHint(): void {
+      hintEpoch += 1;
       dismissHint?.();
     }
 
-    /** 不捕获焦点；显示/关闭失败都不能打断记账和 Bot 回合。 */
-    function showHint(hints: string[], ctx: ExtensionContext): void {
-      closeHint();
+    /** 捕获键盘焦点，等待确认或取消；关闭本身不写账。 */
+    async function chooseHint(hints: string[], ctx: ExtensionContext): Promise<string | undefined> {
       let closed = false;
-      let done: (() => void) | undefined;
-      let unsubscribe: (() => void) | undefined;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const safely = (action?: () => void) => { try { action?.(); } catch { /* 展示不是对局逻辑 */ } };
-      const cleanup = () => {
-        closed = true;
-        if (timer) clearTimeout(timer);
-        safely(unsubscribe);
-        unsubscribe = undefined;
-        if (dismissHint === close) dismissHint = undefined;
-      };
-      const close = () => {
-        if (closed) return;
-        cleanup();
-        safely(done);
-      };
+      let done: ((value: string | undefined) => void) | undefined;
+      const close = () => { closed = true; done?.(undefined); };
       dismissHint = close;
-      timer = setTimeout(close, 30_000);
-      timer.unref?.();
-      const overlayOptions: OverlayOptions = {
-        anchor: "center", width: "60%", margin: 1, maxHeight: "50%", nonCapturing: true,
-      };
-      const failed = () => {
-        cleanup();
-        safely(() => notify(ctx, "提示面板显示失败。", "error"));
-      };
+      const overlayOptions: OverlayOptions = { anchor: "center", width: "60%", margin: 1 };
       try {
-        void ctx.ui.custom<void>((tui, theme, keybindings, finish) => {
-          done = () => finish();
+        return await ctx.ui.custom<string | undefined>((tui, theme, _keybindings, finish) => {
+          done = finish;
           const content: PanelContent = {
-            title: "💡 提示", lines: hints.map((hint, i) => `${i + 1}. ${hint}`),
-            footer: "本轮 0 分 · Bot 接龙中", theme,
+            title: "💡 提示", lines: hints.map((hint, i) => `❯ ${i + 1}. ${hint}`),
+            footer: hintFooter(game.hintsRemaining), theme,
           };
-          const panel = createPanel(content);
           overlayOptions.width = panelWidth(content, tui.terminal.columns);
-          // Pi 在每次布局前调用 visible，因此 resize 也会重新计算宽度和安全位置。
-          overlayOptions.visible = (columns, rows) => {
-            try {
-              const width = panelWidth(content, columns);
-              overlayOptions.width = width;
-              const height = panel.render(width).length;
-              // Pi 的公共 children 顺序：对话文档，随后是状态、widget、编辑器和 footer。
-              // regular 模式短对话未必填满屏幕；fullscreen 则把这些控件固定在底部。
-              const heights = tui.children.map((child) => child.render(columns).length);
-              const controls = heights.slice(1).reduce((a, b) => a + b, 0);
-              const bottom = tui.mode === "fullscreen" ? rows : Math.min(rows, heights.reduce((a, b) => a + b, 0));
-              const centeredRow = 1 + Math.floor((rows - 2 - height) / 2);
-              const safeRow = Math.min(centeredRow, bottom - controls - height - 1);
-              overlayOptions.offsetY = safeRow - centeredRow;
-              // 太矮时整块隐藏，不让裁切后的半块面板遮住仪表盘或输入框。
-              return !closed && width >= 5 && height <= Math.floor(rows * 0.5) && safeRow >= 1;
-            } catch { return false; }
+          overlayOptions.visible = (columns) => {
+            overlayOptions.width = panelWidth(content, columns);
+            return !closed;
           };
-          if (closed) safely(done);
-          else {
-            // Pi 内置命令早于 input 事件处理；监听提交快捷键但不消费它。
-            unsubscribe = ctx.ui.onTerminalInput((data) => {
-              if (keybindings.matches(data, "tui.input.submit")) close();
-              return undefined;
-            });
-          }
-          return panel;
-        }, { overlay: true, overlayOptions }).then(cleanup, failed);
-      } catch { failed(); }
+          if (closed) finish(undefined);
+          return createHintSelector(hints, game.hintsRemaining, theme, finish, () => tui.requestRender());
+        }, { overlay: true, overlayOptions });
+      } catch {
+        notify(ctx, "提示面板显示失败，请重新 /hint 或直接作答。", "error");
+        return undefined;
+      } finally {
+        closed = true;
+        if (dismissHint === close) dismissHint = undefined;
+      }
     }
 
     // ---------------------------------------------------------------- 展示
@@ -155,6 +119,7 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     /** 人类这一步的结果告诉玩家；开了新回合就返回要交给 Bot 的回合 prompt。 */
     function report(out: Outcome, ctx: ExtensionContext): string | undefined {
       switch (out.kind) {
+        case "hints":
         case "noop":
           return undefined;
         case "busy":
@@ -173,13 +138,8 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
           return undefined;
         case "bot_turn":
           nudges = 0;
-          if (out.hints.length > 0) {
-            if (ctx.mode === "tui") {
-              showHint(out.hints, ctx);
-            } else {
-              card([`提示：${out.hints.join("、")}`, view.describeHumanMove(out.human)]);
-            }
-          } else notify(ctx, view.describeHumanMove(out.human));
+          pendingHints = [];
+          notify(ctx, view.describeHumanMove(out.human));
           refresh(ctx);
           return out.prompt;
       }
@@ -201,6 +161,7 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
     pi.on("session_start", async (_event, ctx) => {
       closeHint();
       piLLM?.bind(ctx);
+      pendingHints = [];
       game = newGame();
       nudges = 0;
       pi.setActiveTools([SUBMIT_TOOL]); // Bot 只有这一个工具：护栏写在代码里，不靠启动参数
@@ -216,6 +177,7 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
 
     pi.on("session_shutdown", () => {
       closeHint();
+      pendingHints = [];
       if (ticker) clearInterval(ticker);
       ticker = undefined;
     });
@@ -230,7 +192,18 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
         notify(ctx, `未知命令 ${text.split(/\s+/)[0]}，输入 /help 查看命令。`, "warning");
         return { action: "handled" };
       }
-      const prompt = report(await game.submitHuman(text, ctx.signal), ctx);
+      let candidate: string | undefined;
+      if (pendingHints.length > 0 && /^\d+$/.test(text)) {
+        candidate = pendingHints[Number(text) - 1];
+        if (!candidate) {
+          notify(ctx, `请输入 1–${pendingHints.length} 的候选编号或直接输入成语。`, "warning");
+          return { action: "handled" };
+        }
+      }
+      const out = pendingHints.length > 0
+        ? await game.submitHint(candidate ?? text, ctx.signal)
+        : await game.submitHuman(text, ctx.signal);
+      const prompt = report(out, ctx);
       return prompt === undefined ? { action: "handled" } : { action: "transform", text: prompt };
     });
 
@@ -304,6 +277,7 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
         description: view.COMMANDS[name]![1],
         handler: async (args, ctx) => {
           closeHint();
+          if (["hint", "pass", "undo", "restart", "difficulty"].includes(name)) pendingHints = [];
           await handler(args, ctx);
         },
         getArgumentCompletions: choices
@@ -318,7 +292,28 @@ export function createIdiomExtension(options: IdiomExtensionOptions = {}) {
 
     command("hint", async (_args, ctx) => {
       notify(ctx, "正在想提示…");
-      startBotTurn(report(await game.hint(3, ctx.signal), ctx));
+      const epoch = hintEpoch;
+      const hintGame = game;
+      const out = await hintGame.hint(3, ctx.signal);
+      if (epoch !== hintEpoch) return;
+      if (out.kind !== "hints") {
+        report(out, ctx);
+        return;
+      }
+      if (ctx.mode !== "tui") {
+        pendingHints = out.hints;
+        card([...out.hints.map((hint, i) => `${i + 1}. ${hint}`),
+          "输入候选编号或直接输入成语", `剩余提示 ${game.hintsRemaining} 次`]);
+        return;
+      }
+      while (epoch === hintEpoch) {
+        const chosen = await chooseHint(out.hints, ctx);
+        if (chosen === undefined || epoch !== hintEpoch) return;
+        const result = await hintGame.submitHint(chosen, ctx.signal);
+        if (hintGame !== game) return;
+        startBotTurn(report(result, ctx));
+        if (result.kind !== "invalid") return;
+      }
     });
     command("pass", (_args, ctx) => startBotTurn(report(game.pass(), ctx)));
     command("undo", (_args, ctx) => void report(game.undo(), ctx));

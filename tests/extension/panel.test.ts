@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
-import { createPanel, panelWidth } from "../../src/extension/panel.ts";
+import { createHintSelector, createPanel, panelWidth } from "../../src/extension/panel.ts";
 import { fakeTheme } from "./fake-pi.ts";
 
 const content = {
   title: "💡 提示",
   lines: ["1. 心想事成", "2. 心旷神怡"],
-  footer: "本轮 0 分 · Bot 接龙中",
+  footer: "剩余提示 2 次",
   theme: fakeTheme,
 };
 
@@ -15,7 +15,7 @@ test("面板等宽、不透明，圆角边框内嵌标题，正文编号、分�
   const panel = createPanel(content);
   const rendered = panel.render(width);
   const lines = rendered.map(stripTerminalSequences);
-  expect(width).toBe(28);
+  expect(width).toBe(40);
   for (const line of rendered) {
     expect(visibleWidth(line)).toBe(width);
     expect(line.startsWith("\x1b[48;5;236m")).toBe(true);
@@ -39,8 +39,8 @@ test("通用面板支持无底注的状态/结算正文", () => {
   expect(lines.join("\n")).not.toContain("├");
 });
 
-test("内容宽度加边框内边距，下限 28，上限终端 60%", () => {
-  expect(panelWidth({ ...content, lines: ["中".repeat(16)] }, 100)).toBe(36);
+test("内容宽度加边框内边距，下限 40，上限终端 60%", () => {
+  expect(panelWidth({ ...content, lines: ["中".repeat(16)] }, 100)).toBe(40);
   expect(panelWidth({ ...content, lines: ["中".repeat(80)] }, 100)).toBe(60);
 });
 
@@ -58,3 +58,31 @@ for (const columns of [0, 1, 2, 3, 5, 10, 20, 40, 80]) {
     if (width >= 5) expect(lines[1]).toContain("…");
   });
 }
+
+
+test("选择框上下移动、数字选中、回车确认；其余按键不关闭", () => {
+  const chosen: (string | undefined)[] = [];
+  const panel = createHintSelector(["心想事成", "心旷神怡"], 2, fakeTheme, (value) => chosen.push(value), () => {});
+  const text = () => panel.render(48).map(stripTerminalSequences).join("\n");
+  expect(text()).toContain("❯ 1. 心想事成");
+  panel.handleInput!("\x1b[B");
+  expect(text()).toContain("❯ 2. 心旷神怡");
+  panel.handleInput!("\x1b[A");
+  expect(text()).toContain("❯ 1. 心想事成");
+  panel.handleInput!("2");
+  expect(text()).toContain("❯ 2. 心旷神怡");
+  panel.handleInput!("x");
+  panel.handleInput!("9");
+  expect(chosen).toEqual([]);
+  panel.handleInput!("\r");
+  expect(chosen).toEqual(["心旷神怡"]);
+  for (const line of panel.render(48)) expect(visibleWidth(line)).toBe(48);
+});
+
+test("选择框 Esc 取消，不自动选第一个", () => {
+  const chosen: (string | undefined)[] = [];
+  const panel = createHintSelector(["心想事成"], 2, fakeTheme, (value) => chosen.push(value), () => {});
+  expect(chosen).toEqual([]);
+  panel.handleInput!("\x1b");
+  expect(chosen).toEqual([undefined]);
+});
