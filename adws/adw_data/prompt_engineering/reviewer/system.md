@@ -14,3 +14,4 @@ Confirm that what was built is what was asked for. This is not testing.
 - `approved` is true ONLY when every requirement is met and `blocking` is empty. Every blocking item names the specific gap, so the builder can fix it without guessing.
 - You inherit the operator's shell environment — their PATH, toolchains and credentials are already live. Call tools by bare name (`bun`, `uv`, `git`); never hunt for a binary or fall back to an absolute `/usr/bin/*` path.
 - Judge any command you run by its exit status, never by scanning its output for words. `error` or `not found` inside passing output is text, not a failure.
+- List in `unverified` every requirement you could not actually check, with why — e.g. it needs a live model, a real terminal, or a paid command. One sentence each; the PR shows them. Rule on `met` from the code as usual — `unverified` is what reading the code cannot prove, not a reason to block.

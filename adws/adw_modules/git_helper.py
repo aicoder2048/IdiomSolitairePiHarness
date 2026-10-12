@@ -131,7 +131,11 @@ def added_lines(base: str, path: str) -> list[str]:
 
 
 def diff_stat(base: str) -> str:
-    return _git("diff", "--stat", base)
+    """`git diff --stat`, with each line's leading space kept so the columns stay aligned."""
+    result = subprocess.run(["git", "diff", "--stat", base], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"git diff --stat {base} failed: {result.stderr.strip()}")
+    return result.stdout.rstrip()
 
 
 def diff_counts(base: str) -> tuple[int, int]:

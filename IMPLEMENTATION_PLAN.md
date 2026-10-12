@@ -136,7 +136,15 @@
 - 声明过的改弱出现在最前面
 - PR 正文和反馈回复里包含证据
 
-**Status**: Not Started
+**实施时的偏差**:
+- `adw_build_test` 也在最后写 evidence（`pr-feedback` 的回复要用）；它不提交，所以 HEAD 一栏写「工作区（未提交）」，reviewer 一节是「（本次未运行）」。
+- 四参数规则：`open_pr(issue, body)` + 纯函数 `pr_body(number, intro, bundle, where)`；`reply(pr, points, Delivery)`。回复里的证据包放在 `<details>` 里折叠。
+- Reviewer prompt 明确 `unverified` 不是拦截理由，`met` 照常按代码判，避免 TUI 这类离线查不了的需求让 run 永远不过。
+- 新增测试名按文件类型解析（`.py` 只认 `def test_`，其它只认 `test(`/`it(`），否则 Python 测试里的 bun 样例字符串会被误抓。
+- `git_helper.diff_stat` 保留首行缩进（原来被 strip 掉，列不对齐；documenter 的 changes 也受益）。
+- 离线演练：在真实仓库临时改测试，跑真实的 proof / integrity / `bun test` 渲染证据包，10 节齐全、声明置顶、跳过数进摘要。**`just issue N --no-pr` 的真实运行留给 Stage 4 一起验**（要调用模型）。
+
+**Status**: Complete
 
 ---
 

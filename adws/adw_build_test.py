@@ -9,6 +9,7 @@ Usage:
 
 Phases: engineer(request) -> builder -> code(test+lint) -> code(prove) -> code(integrity)
         [-> builder(fix | restore) -> code(test+lint) -> code(prove) -> code(integrity) ... bounded]
+        -> code(evidence: context_handoff/evidence.md, accepted or not)
 
 Testing and lint are CODE. Their commands are written down in adw_modules/quality.py,
 so running it needs no judgement — only repairing it does. Failures reach the
@@ -25,13 +26,17 @@ does not know what kind of work it was given. The integrity check
 (adw_modules/integrity.py) is binding: a skip marker added to a test, a deleted
 test file, or fewer tests or expect() calls than the baseline sends the builder
 back, unless it declared that weakening in `weakened_tests`.
+
+The run ends by writing what its code recorded into the session's evidence.md
+(adw_modules/evidence.py); adw_pr_feedback appends it to its reply on the PR.
+This chain does not commit, so the bundle names HEAD as the uncommitted tree.
 """
 
 import argparse
 import sys
 
-from adw_modules import agents, gates, git_helper, integrity, proof, quality, session, utils
-from adw_modules.data_types import AgentCall, BuildOutput, IntegrityParams, PhaseParams, ProofParams
+from adw_modules import agents, evidence, gates, git_helper, integrity, proof, quality, session, utils
+from adw_modules.data_types import AgentCall, BuildOutput, EvidenceInput, IntegrityParams, PhaseParams, ProofParams
 
 REQUIRED_AGENTS = ["builder"]
 MAX_FIX_LOOPS = 3
@@ -47,7 +52,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         passed = sum(1 for check in result.checks if check.passed)
         ph.log(passed=result.passed, checks=f"{passed}/{len(result.checks)}", artifacts=", ".join(result.artifacts))
 
-    def prove(name: str) -> None:
+    def prove(name: str):
         """The red/green record of the tests this run changed — evidence only in this chain."""
         with run.phase(
             PhaseParams(
@@ -64,6 +69,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                 green=f"{sum(c.green for c in result.checks)}/{n} green on HEAD",
                 artifacts=", ".join(result.artifacts),
             )
+        return result
 
     def check_integrity(name: str):
         """Whether the change weakened the tests that judge it — undeclared weakening fails."""
@@ -99,6 +105,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         builds = [ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, gates=[gates.diff_matches_claims]))]
 
     test = None
+    proven = None
     intact = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(
@@ -113,7 +120,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             record(ph, test)
 
         if test.passed:
-            prove(f"prove_{i}")
+            proven = prove(f"prove_{i}")
             intact = check_integrity(f"integrity_{i}")
             if intact.passed:
                 break
@@ -144,10 +151,39 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                 )
             )
 
-    return run.finish(
-        accepted=test is not None and test.passed and intact is not None and intact.passed,
-        reason=f"the suite, lint or the test-integrity check still failed after {MAX_FIX_LOOPS} fix attempt(s)",
-    )
+    accepted = test is not None and test.passed and intact is not None and intact.passed
+    reason = f"the suite, lint or the test-integrity check still failed after {MAX_FIX_LOOPS} fix attempt(s)"
+    with run.phase(
+        PhaseParams(
+            name="evidence",
+            kind="code",
+            owner="evidence",
+            description="Write down what the run's code recorded, and what nobody checked — for the PR reply",
+        )
+    ) as ph:
+        path = evidence.write(
+            run,
+            EvidenceInput(
+                adw_id=run.adw_id,
+                workflow="adw_build_test",
+                accepted=accepted,
+                reason="" if accepted else reason,
+                branch=git_helper.current_branch(),
+                baseline=baseline,
+                diff_stat=git_helper.diff_stat(baseline),
+                changed_files=git_helper.diff_files(baseline) + git_helper.untracked_files(),
+                quality=test,
+                proof=proven,
+                integrity=intact,
+                new_tests=evidence.new_tests(baseline, quality.TEST_FILES),
+                unverified=cfg.evidence.unverified,
+                tokens=run.tokens,
+                cost=run.cost,
+            ),
+        )
+        ph.log(path=str(path))
+
+    return run.finish(accepted=accepted, reason=reason)
 
 
 if __name__ == "__main__":

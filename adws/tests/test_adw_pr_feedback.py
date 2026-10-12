@@ -217,6 +217,7 @@ def test_success_commits_the_request_and_the_fix_pushes_and_replies_once(repo, g
     monkeypatch.setattr(fb, "run_chain", chain)
     monkeypatch.setattr(fb, "git_push", lambda: pushed.append(True))
     monkeypatch.setattr(fb, "builder_report", lambda config, adw_id: "改成了常量 X")
+    monkeypatch.setattr(fb.evidence, "load", lambda config, adw_id: "# SSSF 证据包 · run `cafe1234`")
     assert fb.main(5, adw_id="cafe1234") == 0
 
     files = subprocess.run(["git", "show", "--name-only", "--format="], cwd=repo, capture_output=True, text=True)
@@ -227,6 +228,7 @@ def test_success_commits_the_request_and_the_fix_pushes_and_replies_once(repo, g
     body = replies[0][-1]
     assert fb.FACTORY_MARK in body and fb.HANDLED_MARK in body
     assert "cafe1234" in body and "改成了常量 X" in body
+    assert body.index("改成了常量 X") < body.index("# SSSF 证据包 · run `cafe1234`")
 
 
 def test_a_failed_chain_commits_nothing_and_does_not_reply(repo, gh, monkeypatch, capsys):

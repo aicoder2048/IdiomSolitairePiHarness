@@ -13,6 +13,7 @@ Phases: engineer(request) -> planner -> git(commit_plan)
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
         -> code(retest: test+lint, then prove and integrity, only if a revision changed code)
         -> git(commit_build) -> code(changes) -> documenter -> git(commit_docs)
+        -> code(evidence: context_handoff/evidence.md, accepted or not)
 
 Three commits, three work products, three authors. The plan, the code, and the
 write-up each land in their own commit, and each commit message is the words of
@@ -50,6 +51,11 @@ on the branch. A run that fails verification therefore leaves the plan
 committed and the working tree dirty — the spec is a real artifact either way,
 and the unfinished code stays where the engineer can see it.
 
+Last, code writes what it recorded — commands and their counts, the red/green
+pair, the integrity comparison, the reviewer's table, what nobody checked — into
+the session's evidence.md (adw_modules/evidence.py). adw_issue makes it the PR
+body. It is written for a run that was not accepted too: that is when it is read.
+
 The documenter measures against the commit this run STARTED from, not against
 `main`, because by then the run has moved `main` itself. That baseline is
 pinned before the first commit phase and printed in the request phase.
@@ -58,12 +64,13 @@ pinned before the first commit phase and printed in the request phase.
 import argparse
 import sys
 
-from adw_modules import agents, changes, gates, git_helper, integrity, proof, quality, session, utils
+from adw_modules import agents, changes, evidence, gates, git_helper, integrity, proof, quality, session, utils
 from adw_modules.data_types import (
     AgentCall,
     BuildOutput,
     ChangeCapture,
     DocumentOutput,
+    EvidenceInput,
     IntegrityParams,
     PhaseParams,
     PlanOutput,
@@ -370,10 +377,41 @@ def main(
         ) as ph:
             commit(ph, document)
 
-    return run.finish(
-        accepted=verified,
-        reason="the suite, lint, the red/green proof, the test-integrity check or the review never came back clean",
-    )
+    reason = "the suite, lint, the red/green proof, the test-integrity check or the review never came back clean"
+    with run.phase(
+        PhaseParams(
+            name="evidence",
+            kind="code",
+            owner="evidence",
+            description="Write down what the run's code recorded, and what nobody checked — the PR body",
+        )
+    ) as ph:
+        path = evidence.write(
+            run,
+            EvidenceInput(
+                adw_id=run.adw_id,
+                workflow="adw_simple_sdlc",
+                kind=kind,
+                accepted=verified,
+                reason="" if verified else reason,
+                branch=git_helper.current_branch(),
+                baseline=baseline,
+                head=git_helper.rev("HEAD") if verified else "",
+                diff_stat=git_helper.diff_stat(baseline),
+                changed_files=git_helper.diff_files(baseline) + git_helper.untracked_files(),
+                quality=test,
+                proof=proven,
+                integrity=intact,
+                new_tests=evidence.new_tests(baseline, quality.TEST_FILES),
+                review=review,
+                unverified=cfg.evidence.unverified,
+                tokens=run.tokens,
+                cost=run.cost,
+            ),
+        )
+        ph.log(path=str(path))
+
+    return run.finish(accepted=verified, reason=reason)
 
 
 if __name__ == "__main__":

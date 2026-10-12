@@ -227,6 +227,29 @@ def test_success_pushes_then_opens_a_pr_titled_after_the_issue(repo, gh_path, mo
     assert "https://github.com/o/r/pull/9" in capsys.readouterr().out
 
 
+def test_the_pr_body_is_closes_then_the_run_then_the_evidence_bundle(repo, gh_path, monkeypatch):
+    log = fake_gh(gh_path)
+    monkeypatch.setattr(adw_issue, "run_chain", lambda *a, **k: 0)
+    monkeypatch.setattr(adw_issue, "git_push", lambda: None)
+    monkeypatch.setattr(adw_issue.evidence, "load", lambda config, adw_id: f"# SSSF 证据包 · run `{adw_id}`")
+    assert adw_issue.main(7, adw_id="cafe1234") == 0
+    pr = next(line for line in log.read_text().splitlines() if line.startswith("pr create"))
+    body = pr[pr.index("--body ") + len("--body ") :]
+    assert body.startswith("Closes #7")
+    assert body.index("cafe1234") < body.index("# SSSF 证据包 · run `cafe1234`")
+
+
+def test_a_pr_body_without_a_bundle_says_so():
+    body = adw_issue.pr_body(7, "Built by run x.", "", "sessions/x/context_handoff/evidence.md")
+    assert body.startswith("Closes #7\n")
+    assert "sessions/x/context_handoff/evidence.md" in body and "没有找到证据包" in body
+
+
+def test_a_pr_body_stays_under_githubs_limit():
+    body = adw_issue.pr_body(7, "Built by run x.", "x" * 100_000, "sessions/x/context_handoff/evidence.md")
+    assert len(body) < 65_536 and "截断" in body
+
+
 def test_the_chain_is_told_the_kind_so_a_bug_must_prove_its_test(repo, gh_path, monkeypatch):
     fake_gh(gh_path, issue={**ISSUE, "labels": [{"name": "bug"}]})
     seen = {}

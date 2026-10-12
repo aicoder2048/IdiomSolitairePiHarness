@@ -44,6 +44,11 @@ observability:
   db: adws/adw_data/sssf.db        # tracer writes here directly; the UI polls it
   poll_ms: 500                     # visualizer live-poll cadence
 
+# The evidence bundle every run writes (adw_modules/evidence.py) and every factory PR carries.
+evidence:
+  unverified:                      # what this factory never checks — said in every PR, not left implied
+    - 未运行 `just smoke`（会调用 DeepSeek，按量计费；工厂不跑）
+
 agents:
   - name: planner
     model: openai-codex/gpt-6-astra

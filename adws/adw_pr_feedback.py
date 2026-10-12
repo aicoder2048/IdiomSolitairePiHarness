@@ -11,7 +11,7 @@ Usage:
 Phases: code(feedback: gh api -> every review, inline and conversation comment by an allowed
         author since the factory's last reply -> requests/pr-<N>-feedback-<k>.md)
         -> adw_build_test (builder -> code(test+lint) -> bounded fix loop)
-        -> code(commit, git push, one PR comment that answers the reviewer)
+        -> code(commit, git push, one PR comment that answers the reviewer, with the run's evidence.md)
 
 The factory opens its PRs under the operator's own GitHub account, and GitHub does not let
 anyone request changes on their own PR, so "Request changes" cannot be the trigger. The
@@ -34,7 +34,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from adw_modules import git_helper, utils
+from adw_modules import evidence, git_helper, utils
 
 DEFAULT_CONFIG = "adws/adw_sssf_config/sssf.config.yaml"
 TEMPLATE = Path("adws/adw_data/prompt_engineering/issue/feedback.md")
@@ -54,6 +54,16 @@ class Point:
     at: str  # ISO 8601, UTC — compares as text
     body: str
     where: str  # "review", "comment", or "path:line"
+
+
+@dataclass(frozen=True)
+class Delivery:
+    """What one round produced: the commit, the run, the builder's answer and the run's evidence bundle."""
+
+    sha: str
+    adw_id: str
+    report: str
+    bundle: str
 
 
 @dataclass(frozen=True)
@@ -171,21 +181,29 @@ def git_push() -> None:
     subprocess.run(["git", "push", "origin", "HEAD"], check=True)
 
 
-def reply(pr: PullRequest, points: list[Point], sha: str, adw_id: str, report: str) -> None:
+def reply(pr: PullRequest, points: list[Point], done: Delivery) -> None:
     stat = subprocess.run(["git", "diff", "--stat", "HEAD~1", "HEAD"], capture_output=True, text=True).stdout.strip()
+    where = f"sessions/{done.adw_id}/context_handoff/evidence.md"
+    proof = evidence.for_github(done.bundle, where) if done.bundle else f"（没有找到证据包：`{where}`）"
     body = "\n".join(
         [
             FACTORY_MARK,
             HANDLED_MARK,
-            f"🏭 SSSF run `{adw_id}` 处理了 {len(points)} 条意见，提交 {sha}。",
+            f"🏭 SSSF run `{done.adw_id}` 处理了 {len(points)} 条意见，提交 {done.sha}。",
             "",
             "**Builder 的说明**",
             "",
-            report or "（builder 没有留下说明）",
+            done.report or "（builder 没有留下说明）",
             "",
             "```text",
             stat or "(no diff)",
             "```",
+            "",
+            "<details><summary>证据包（这一轮的代码记录与未验证项）</summary>",
+            "",
+            proof,
+            "",
+            "</details>",
             "",
             "需要再改：继续留言，然后重新打上 `factory:revise`。",
         ]
@@ -256,7 +274,7 @@ def main(
         return 0
     try:
         git_push()
-        reply(pr, points, sha, adw_id, builder_report(config, adw_id))
+        reply(pr, points, Delivery(sha, adw_id, builder_report(config, adw_id), evidence.load(config, adw_id)))
     except (FeedbackError, subprocess.CalledProcessError) as e:
         print(f"adw_pr_feedback: committed {sha} on {branch} but did not deliver it: {e}", file=sys.stderr)
         return 1

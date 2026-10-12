@@ -68,22 +68,30 @@ def _count(run, cwd: Path, counter: SuiteCounter, side: str) -> tuple[SuiteCount
     return parse_bun_summary(output), str(artifact)
 
 
-def check(run, params: IntegrityParams) -> IntegrityResult:
-    """Compare the change's tests with the baseline's; fail on any weakening not declared."""
+def added_test_lines(base: str, patterns: list[str]) -> dict[str, list[str]]:
+    """Each test file that exists and differs from `base`, with the lines it gains — all of a new file's."""
     untracked = set(git_helper.untracked_files())
     changed = sorted(
-        p
-        for p in set(git_helper.diff_files(params.baseline)) | untracked
-        if Path(p).is_file() and is_test(p, params.tests)
+        p for p in set(git_helper.diff_files(base)) | untracked if Path(p).is_file() and is_test(p, patterns)
     )
+    return {
+        path: (
+            Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+            if path in untracked
+            else git_helper.added_lines(base, path)
+        )
+        for path in changed
+    }
+
+
+def check(run, params: IntegrityParams) -> IntegrityResult:
+    """Compare the change's tests with the baseline's; fail on any weakening not declared."""
+    added = added_test_lines(params.baseline, params.tests)
+    changed = list(added)
     deleted = sorted(p for p in git_helper.deleted_files(params.baseline) if is_test(p, params.tests))
 
     findings: list[IntegrityFinding] = []
-    for path in changed:
-        if path in untracked:
-            lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
-        else:
-            lines = git_helper.added_lines(params.baseline, path)
+    for path, lines in added.items():
         findings += _markers(path, lines)
     findings += [IntegrityFinding(file=path, problem="deletes the test file") for path in deleted]
 

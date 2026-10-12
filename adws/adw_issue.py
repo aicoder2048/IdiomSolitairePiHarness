@@ -10,7 +10,7 @@ Usage:
 
 Phases: code(issue: gh issue view -> type label -> kind template -> requests/issue-<N>-<slug>.md)
         -> adw_simple_sdlc (planner -> builder -> tests -> reviewer -> documenter, three commits)
-        -> code(pr: git push -u origin HEAD, gh pr create titled after the issue, "Closes #<N>")
+        -> code(pr: git push -u origin HEAD, gh pr create titled after the issue, "Closes #<N>" + evidence.md)
 
 The sorting is code, not a prompt. Exactly one of the repository's type labels
 (bug, enhancement, chore, documentation) picks the template in
@@ -28,6 +28,10 @@ The request file is written before the chain starts and is part of its first
 commit, like every other file under requests/. A failed chain leaves the plan
 committed and the code uncommitted, as adw_simple_sdlc does; the recovery command
 is printed, and no PR is opened for it.
+
+The PR body is the run's evidence bundle (adw_modules/evidence.py), after the
+`Closes #N` line: what the run's code recorded and what nobody checked. A
+reviewer reads the evidence where they review, not in a local session dir.
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from adw_modules import git_helper, utils
+from adw_modules import evidence, git_helper, utils
 from adw_modules.runner import Run
 
 DEFAULT_CONFIG = "adws/adw_sssf_config/sssf.config.yaml"
@@ -148,13 +152,14 @@ def git_push() -> None:
     subprocess.run(["git", "push", "-u", "origin", "HEAD"], check=True)
 
 
-def open_pr(issue: Issue, kind: str, request: Path, adw_id: str) -> str:
-    """A pull request titled after the issue; `Closes #N` links and closes it on merge. Returns its URL."""
-    body = (
-        f"Closes #{issue.number}\n\n"
-        f"Built by SSSF run `{adw_id}` (adw_issue, kind: {kind}) from `{request}`. "
-        f"Plan, code and write-up are its three commits."
-    )
+def pr_body(number: int, intro: str, bundle: str, where: str) -> str:
+    """`Closes #N` (links and closes the issue on merge), one line on the run, then its evidence bundle."""
+    proof = evidence.for_github(bundle, where) if bundle else f"（没有找到证据包：`{where}`）"
+    return f"Closes #{number}\n\n{intro}\n\n{proof}"
+
+
+def open_pr(issue: Issue, body: str) -> str:
+    """A pull request titled after the issue. Returns its URL."""
     result = subprocess.run(
         ["gh", "pr", "create", "--title", issue.title, "--body", body], capture_output=True, text=True
     )
@@ -297,7 +302,12 @@ def main(
 
     try:
         git_push()
-        url = open_pr(issue, work, request, adw_id)
+        intro = (
+            f"Built by SSSF run `{adw_id}` (adw_issue, kind: {work}) from `{request}`. "
+            "Plan, code and write-up are its three commits."
+        )
+        where = f"sessions/{adw_id}/context_handoff/evidence.md"
+        url = open_pr(issue, pr_body(issue.number, intro, evidence.load(config, adw_id), where))
     except (IssueError, subprocess.CalledProcessError) as e:
         print(f"adw_issue: the code landed on {branch} but the PR did not: {e}", file=sys.stderr)
         if progress:

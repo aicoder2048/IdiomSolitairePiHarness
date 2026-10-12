@@ -131,6 +131,7 @@ class ReviewOutput(EnvelopeBase):
     approved: bool = False
     findings: list[ReviewFinding] = Field(default_factory=list)
     blocking: list[str] = Field(default_factory=list)  # what must change before approval
+    unverified: list[str] = Field(default_factory=list)  # requirements it could not check, and why — for the PR
 
 
 class DocumentOutput(EnvelopeBase):
@@ -359,6 +360,32 @@ class IntegrityResult(BaseModel):
     unverified: list[str] = Field(default_factory=list)  # what this check could not see
 
 
+# ── Evidence bundle (deterministic) ──────────────────────────────────────────
+
+
+class EvidenceInput(BaseModel):
+    """Everything a run's code recorded, for adw_modules/evidence.py to render. None = did not run."""
+
+    adw_id: str
+    workflow: str  # the ADW that ran, e.g. "adw_simple_sdlc"
+    kind: str | None = None
+    accepted: bool
+    reason: str = ""  # why it was not accepted
+    branch: str = ""
+    baseline: str = ""
+    head: str = ""  # "" = the change is still uncommitted (the caller commits it)
+    diff_stat: str = ""
+    changed_files: list[str] = Field(default_factory=list)
+    quality: QualityResult | None = None
+    proof: ProofResult | None = None
+    integrity: IntegrityResult | None = None
+    new_tests: list[str] | None = None
+    review: ReviewOutput | None = None
+    unverified: list[str] = Field(default_factory=list)  # the project's standing list (EvidenceConfig)
+    tokens: int = 0
+    cost: float = 0.0
+
+
 # ── Agent calls ──────────────────────────────────────────────────────────────
 
 
@@ -468,9 +495,15 @@ class ObservabilityConfig(BaseModel):
     poll_ms: int = 500
 
 
+class EvidenceConfig(BaseModel):
+    # What this project's factory never checks, stated in every PR (e.g. a paid smoke test).
+    unverified: list[str] = Field(default_factory=list)
+
+
 class SSSFConfig(BaseModel):
     defaults: ConfigDefaults = Field(default_factory=ConfigDefaults)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    evidence: EvidenceConfig = Field(default_factory=EvidenceConfig)
     agents: list[AgentConfig] = Field(default_factory=list)
 
 
