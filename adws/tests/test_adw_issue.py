@@ -359,3 +359,13 @@ def test_no_comment_id_means_no_edits(repo, gh_path, monkeypatch):
     monkeypatch.setattr(adw_issue, "git_push", lambda: None)
     assert adw_issue.main(7, adw_id="cafe1234") == 0
     assert [p.split(" ")[0:2] for p in comments(log)] == [["issue", "comment"]]
+
+
+@pytest.mark.parametrize("base", ["main", "feature/stack"])
+def test_the_pr_merges_into_base_not_the_repos_default_branch(repo, gh_path, monkeypatch, base):
+    log = fake_gh(gh_path)
+    monkeypatch.setattr(adw_issue, "run_chain", lambda *a: 0)
+    monkeypatch.setattr(adw_issue, "git_push", lambda: None)
+    assert adw_issue.main(7, adw_id="cafe1234", no_comment=True, base=base) == 0
+    create = next(line for line in log.read_text().splitlines() if line.startswith("pr create"))
+    assert f"--base {base} " in create

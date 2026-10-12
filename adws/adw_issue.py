@@ -158,10 +158,10 @@ def pr_body(number: int, intro: str, bundle: str, where: str) -> str:
     return f"Closes #{number}\n\n{intro}\n\n{proof}"
 
 
-def open_pr(issue: Issue, body: str) -> str:
-    """A pull request titled after the issue. Returns its URL."""
+def open_pr(issue: Issue, body: str, base: str) -> str:
+    """A pull request titled after the issue, into `base` (gh would pick the repo's default). Returns its URL."""
     result = subprocess.run(
-        ["gh", "pr", "create", "--title", issue.title, "--body", body], capture_output=True, text=True
+        ["gh", "pr", "create", "--base", base, "--title", issue.title, "--body", body], capture_output=True, text=True
     )
     if result.returncode != 0:
         raise IssueError(f"gh pr create failed: {result.stderr.strip() or result.stdout.strip()}")
@@ -307,7 +307,7 @@ def main(
             "Plan, code and write-up are its three commits."
         )
         where = f"sessions/{adw_id}/context_handoff/evidence.md"
-        url = open_pr(issue, pr_body(issue.number, intro, evidence.load(config, adw_id), where))
+        url = open_pr(issue, pr_body(issue.number, intro, evidence.load(config, adw_id), where), base)
     except (IssueError, subprocess.CalledProcessError) as e:
         print(f"adw_issue: the code landed on {branch} but the PR did not: {e}", file=sys.stderr)
         if progress:
