@@ -36,4 +36,4 @@ def test_just_test_runs_every_suite():
     recipe = re.search(r"^test:\n((?:    .*\n)+)", justfile, re.M)
     assert recipe, "no `test:` recipe in the justfile"
     lines = [line.strip() for line in recipe.group(1).splitlines()]
-    assert lines == ["just typecheck", "bun test", "just test-adws", "just test-autoqueue"]
+    assert lines == ["just typecheck", "bun test", "just test-adws", "just test-autoqueue", "just test-tui-capture"]

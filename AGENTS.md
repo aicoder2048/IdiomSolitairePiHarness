@@ -10,11 +10,12 @@
 | `src/extension/` | Pi extension：`input` 拦截、`submit_idiom` 工具、`context` 裁剪、命令、仪表盘与卡片 |
 | `tests/engine/`、`tests/extension/` | bun 测试；胶水层用 `tests/extension/fake-pi.ts` 的假 `ExtensionAPI` 驱动 |
 | `scripts/smoke.ts` | 联网冒烟（RPC 模式真打两回合） |
+| `scripts/tui_capture.py`、`scripts/tui_scenes.example.json` | 通用隔离 TUI 文本截屏引擎及场景示例；离线假运行器测试在 `tests/test_tui_capture.py` |
 | `adws/`、`scripts/autoqueue.py` | SSSF 软件工厂（Python），来源与本地补丁见 `.claude/skills/sssf/UPSTREAM.md` |
 
 ## 规则
 
-1. **测试**：`just test` = 类型检查 + `bun test` + 工厂测试 + autoqueue 测试，全部离线。`just smoke` 会调用 DeepSeek（按量计费），工厂不跑它。先写失败的测试再实现，行为改动必须带测试。
+1. **测试**：`just test` = 类型检查 + `bun test` + 工厂测试 + autoqueue 测试 + TUI 截屏假运行器测试，全部离线。`just smoke` 会调用 DeepSeek（按量计费），工厂不跑它。`just tui-capture scenes out repo="."` 是手动真实截屏，不加入工厂测试；只运行可信且不需模型的场景。合并前由人验证三次真实截屏逐字节相同，未实际运行不得声称已验证或作为工厂验收证据。先写失败的测试再实现，行为改动必须带测试。
 2. **引擎纯净**：`src/engine/` 只依赖 `pinyin-pro`；凡是 import `@earendil-works/*` 的代码都放在 `src/extension/`。
 3. **能用代码判定的不交给模型**：首字、谐音、长度、判重、计分、轮次都由引擎决定；模型只回答「是不是成语」（裁判）和提议候选（Bot）。
 4. **模型只提议，代码写账**：Bot 只能经 `submit_idiom` 提交；写账只发生在 `input` 处理器、命令和工具的 `execute()` 里。
