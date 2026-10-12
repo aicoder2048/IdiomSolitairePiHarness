@@ -41,7 +41,11 @@ class Tmux:
 
     def __call__(self, argv, **kwargs):
         self.calls.append((argv, kwargs, self.clock.now))
-        assert argv[:2] == ["tmux", "-L"]
+        assert argv[:2] == ["tmux", "-S"]
+        socket = Path(argv[2])
+        assert socket.is_absolute()
+        assert socket == Path(argv[5]).parent / "tmux.sock"
+        assert socket.parent.is_dir()
         assert argv[3:5] == ["-u", "-f"]
         assert kwargs["timeout"] > 0
         assert kwargs["encoding"] == "utf-8"
@@ -52,6 +56,8 @@ class Tmux:
             config = Path(argv[5])
             assert config.read_text() == ("set -g extended-keys on\nset -g extended-keys-format csi-u\n")
             self.configs.append(config)
+            # Model macOS leaving the socket behind even after kill-server.
+            socket.touch()
             start = argv.index("env")
             assert argv[start : start + 2] == ["env", "-i"]
             end = argv.index("sh", start)
@@ -130,7 +136,7 @@ def manifest(out):
 def test_masks_preserve_width_rows_whitespace_and_literal_replacement(setup):
     text = f"{setup.repo} (topic)\n~/repo 'with spaces' (other)\n⏱ 123 中Ａ\n\nkeep  \n"
     masks = [
-        {"pattern": r"(?<=<repo> \()[^)]*(?=\)$)", "replace": "<branch>"},
+        {"pattern": r"(?<=<repo> )\(.*$", "replace": "(<branch>)"},
         {"pattern": r"\d+|中Ａ"},
         {"pattern": "keep", "replace": r"\1"},
         {"pattern": "branch", "replace": "ref"},
@@ -211,6 +217,7 @@ def assert_cleaned(tmux):
     killed = [a[2] for a, _, _ in tmux.calls if a[6] == "kill-server"]
     assert killed == started
     assert all(not p.exists() for p in tmux.configs + tmux.agents)
+    assert all(not Path(p).exists() and not Path(p).parent.exists() for p in started)
 
 
 @pytest.mark.parametrize(
@@ -354,6 +361,15 @@ def test_example():
     assert len(config["masks"]) == 3
     assert config["scenes"][0]["steps"] == [{"text": "/status"}, {"key": "Enter"}, {"wait_for": "📊 状态"}]
     assert config["scenes"][1]["steps"] == [{"text": "/help"}, {"key": "Enter"}, {"wait_for": "📖 成语接龙"}]
+
+
+@pytest.mark.parametrize("branch", ["(main)", "(factory/issue-19)", "(factory/iss...", "(baseline..."])
+def test_example_masks_complete_and_truncated_footer(setup, branch):
+    config = capture.load_scenes(ROOT / "scripts/tui_scenes.example.json")
+    text = f"{setup.repo} {branch}\n~/repo 'with spaces' {branch}\nkeep  \n"
+    assert capture.normalize_screen(text, setup.repo, setup.home, config["masks"]) == (
+        "<repo> (<branch>)\n<repo> (<branch>)\nkeep  \n"
+    )
 
 
 def test_empty_text_is_noop_and_unrelated_files_survive(setup, tmp_path):

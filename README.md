@@ -51,9 +51,9 @@ just tui-capture scripts/tui_scenes.example.json captures .
 
 场景 JSON 示例见 [`scripts/tui_scenes.example.json`](scripts/tui_scenes.example.json)：`launch`、`size`、`ready`、`timeout_seconds`、`masks`、`scenes` 全部必填。场景名限不重复的 `[a-z0-9_-]+`；步骤依次执行 `text`（原样输入）、`key`（一个 tmux 键名）、`wait_for`（每 0.2 秒轮询文字，单次等待受 timeout 限制）。先等待 ready，完成步骤后再稳定 0.3 秒截屏；格式错误会在任何截屏前报错。
 
-每个场景使用独立 tmux server、固定尺寸和临时配置，不碰用户 tmux。pane 用 `env -i`，仅保留 PATH/HOME/TERM 和调用方的 LANG/LC_ALL（都没有则 LANG=en_US.UTF-8），并设置空的 `PI_CODING_AGENT_DIR`、`PI_OFFLINE=1`、`PI_SKIP_VERSION_CHECK=1`、`PI_TELEMETRY=0`；不传 API key 或用户 Pi 配置。**只运行可信场景**：launch 是 shell 命令，这不是限制任意文件/网络访问的安全沙箱。
+每个场景使用独立 tmux server、固定尺寸和临时配置，不碰用户 tmux。通过 `-S <场景临时目录>/tmux.sock` 指定 socket，结束时 kill-server 后连同临时目录一起删除，不在 `/tmp/tmux-<uid>/` 留下 socket。pane 用 `env -i`，仅保留 PATH/HOME/TERM 和调用方的 LANG/LC_ALL（都没有则 LANG=en_US.UTF-8），并设置空的 `PI_CODING_AGENT_DIR`、`PI_OFFLINE=1`、`PI_SKIP_VERSION_CHECK=1`、`PI_TELEMETRY=0`；不传 API key 或用户 Pi 配置。**只运行可信场景**：launch 是 shell 命令，这不是限制任意文件/网络访问的安全沙箱。
 
-引擎先将 repo 绝对路径和对应 `~/…` 替换为 `<repo>`，再按顺序应用正则 masks（多行模式）。未指定 replace 时逐字符变成 `#`，中日韩等双宽字符变成 `##`；指定 replace 时是整段匹配的**字面替换**，不展开反向引用。掩码应只匹配行内内容，不要用替换吞掉换行；引擎不额外裁行、去空白，默认掩码保留换行。路径归一化与显式 replace 不保证等宽。
+引擎先将 repo 绝对路径和对应 `~/…` 替换为 `<repo>`，再按顺序应用正则 masks（多行模式）。未指定 replace 时逐字符变成 `#`，中日韩等双宽字符变成 `##`；指定 replace 时是整段匹配的**字面替换**，不展开反向引用。掩码应只匹配行内内容，不要用替换吞掉换行；引擎不额外裁行、去空白，默认掩码保留换行。路径归一化与显式 replace 不保证等宽。示例分支掩码为 `{"pattern": "(?<=<repo> )\\(.*$", "replace": "(<branch>)"}`，从 `<repo> ` 后的左括号匹配到行尾；即使底栏截断成 `<repo> (factory/iss...`、没有右括号，也统一替换为 `<repo> (<branch>)`。
 
 示例只截不调用模型的 `/status`、`/help`，不截 `/hint`、Bot 回合或结算。真实截屏**不加入 `just test`，工厂不运行**。合并前由人在装有 tmux/Pi 的机器上向三个不同输出目录连跑三次，确认退出码 0、status/help 内容正确且没有 extended-keys 警告，再用 `diff -r` 比较三个目录逐字节相同；离线假运行器测试不能替代这一检查。目前不接工厂证据包或 before/after diff。
 

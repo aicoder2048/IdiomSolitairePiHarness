@@ -12,7 +12,6 @@ import sys
 import tempfile
 import time
 import unicodedata
-import uuid
 from pathlib import Path
 
 
@@ -126,7 +125,7 @@ def capture_scene(config, scene, repo, environ, runner, clock, sleep):
             directory = Path(temporary)
             config_path = directory / "tmux.conf"
             agent_dir = directory / "agent"
-            prefix = ["tmux", "-L", f"tui-capture-{uuid.uuid4().hex}", "-u", "-f", str(config_path)]
+            prefix = ["tmux", "-S", str(directory / "tmux.sock"), "-u", "-f", str(config_path)]
             env = pane_environment(environ, agent_dir)
 
             def command(args, limit=None, cleanup=False):

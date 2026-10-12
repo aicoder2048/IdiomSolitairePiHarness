@@ -6,7 +6,7 @@
   "masks": [
     {"pattern": "(?<=⏱ )\\d+"},
     {"pattern": "(?<=本轮剩 )\\d+"},
-    {"pattern": "(?<=<repo> \\()[^)]*(?=\\)$)", "replace": "<branch>"}
+    {"pattern": "(?<=<repo> )\\(.*$", "replace": "(<branch>)"}
   ],
   "scenes": [
     {"name": "status", "steps": [{"text": "/status"}, {"key": "Enter"}, {"wait_for": "📊 状态"}]},
