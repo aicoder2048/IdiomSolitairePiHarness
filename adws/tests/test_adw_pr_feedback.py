@@ -229,6 +229,7 @@ def test_success_commits_the_request_and_the_fix_pushes_and_replies_once(repo, g
     assert fb.FACTORY_MARK in body and fb.HANDLED_MARK in body
     assert "cafe1234" in body and "改成了常量 X" in body
     assert body.index("改成了常量 X") < body.index("# SSSF 证据包 · run `cafe1234`")
+    assert "```text\n fixed.ts " in body  # the stat keeps its first line's indent, so its columns align
 
 
 def test_a_failed_chain_commits_nothing_and_does_not_reply(repo, gh, monkeypatch, capsys):

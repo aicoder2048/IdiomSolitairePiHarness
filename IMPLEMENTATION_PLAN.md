@@ -170,7 +170,16 @@
 
 **Tests**: 由工厂写（见上），人工合并前审查。
 
-**Status**: Not Started
+**Status**: Complete（issue #19 → PR #20，run `2b935869`；改 PR 一轮 run `2cb9c233` → `6cc92f2`）
+
+**验收结果**:
+- PR 正文 10 节齐全；红绿证明记了两个文件都是红→绿（`tests/test_tui_capture.py` 在基线上因模块不存在而报错），kind 是 feature，只记录；完整性：pytest 不计数，如实列入未验证项；reviewer 20/20，并把「真实 Pi 截屏」列为未验证。
+- 人工验收：真实 `just tui-capture` 连跑 3 次逐字节相同、没有 extended-keys 警告。发现两处问题，作为 PR 意见交给工厂（`factory:revise` → `just pr-feedback 20`）：截断底栏的分支名掩码匹配不到、`/tmp/tmux-<uid>/` 残留 socket 文件。工厂一轮修好，回复带证据包，复验通过。
+
+**实施时的偏差**:
+- Stage 1–3 还不在 main，autoqueue 从 `origin/main` 开 worktree，所以没走 autoqueue：手工开 worktree，跑 `just issue 19 --base aicoder2048/improve-sssf`，issue 不打 `factory:queued`；改 PR 时直接跑 `just pr-feedback 20`，`factory:revise` 手工摘掉。
+- 发现并手工修了两个工厂 bug：`adw_issue` 的 `--base` 没传给 `gh pr create`，PR 开到了 main（`3f3997c`）；`adw_pr_feedback` 回复里的 diff stat 首行被 `strip()` 掉缩进。
+- 待改：证据包「成本」一节只有总额（$2.6152），其中 Codex 订阅的部分是按标价估算的，实际按量扣费的只有 DeepSeek reviewer（$0.034）。应按 provider 分开写。
 
 ---
 

@@ -182,7 +182,7 @@ def git_push() -> None:
 
 
 def reply(pr: PullRequest, points: list[Point], done: Delivery) -> None:
-    stat = subprocess.run(["git", "diff", "--stat", "HEAD~1", "HEAD"], capture_output=True, text=True).stdout.strip()
+    stat = subprocess.run(["git", "diff", "--stat", "HEAD~1", "HEAD"], capture_output=True, text=True).stdout.rstrip()
     where = f"sessions/{done.adw_id}/context_handoff/evidence.md"
     proof = evidence.for_github(done.bundle, where) if done.bundle else f"（没有找到证据包：`{where}`）"
     body = "\n".join(
