@@ -40,7 +40,8 @@ def changed_tests(params: ProofParams) -> list[str]:
     return sorted(p for p in paths if Path(p).is_file() and runner_for(p, params.runners))
 
 
-def _exec(argv: list[str], cwd: Path, timeout: int) -> tuple[int, str]:
+def execute(argv: list[str], cwd: Path, timeout: int) -> tuple[int, str]:
+    """Run `argv` in `cwd` as the operator would; a timeout exits 124, a missing binary 127."""
     try:
         done = subprocess.run(argv, cwd=cwd, env=operator_env(), capture_output=True, text=True, timeout=timeout)
         return done.returncode, done.stdout + done.stderr
@@ -55,8 +56,8 @@ def _check(run, tree: Path, path: str, runner: ProofRunner) -> ProofCheck:
     (tree / path).parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(repo / path, tree / path)  # the test as the change has it, against the code before it
     argv = [arg.replace("{file}", path) for arg in runner.argv]
-    base_rc, base_out = _exec(argv, tree, runner.timeout_seconds)
-    head_rc, head_out = _exec(argv, repo, runner.timeout_seconds)
+    base_rc, base_out = execute(argv, tree, runner.timeout_seconds)
+    head_rc, head_out = execute(argv, repo, runner.timeout_seconds)
 
     seq = run.phases[-1].seq if run.phases else 0
     artifact = Path(run.context_handoff_dir) / "proof" / f"{seq:02d}" / (path.replace("/", "__") + ".log")

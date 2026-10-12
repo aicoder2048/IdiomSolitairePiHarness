@@ -87,7 +87,13 @@
 - 解析真实的 bun 汇总行（`Ran 210 tests across 9 files.`、`1091 expect() calls`）
 - 新增的 `weakened_tests` 字段可以被解析，缺省时为空列表（扩展 envelope 相关测试）
 
-**Status**: Not Started
+**实施时的偏差**:
+- 模块名改为 `adw_modules/integrity.py`（`test_*.py` 形状的模块名会被 pytest 当成测试收集），测试文件为 `adws/tests/test_integrity.py`；签名为 `check(run, IntegrityParams) -> IntegrityResult`。
+- 不与 prove 共用基线树：prove 会把 HEAD 的测试文件拷进它的树，计数必须在干净的基线上跑，所以 integrity 自己 checkout 一次（只在计数器覆盖的测试文件有改动时）。
+- 标记另加了 `.skipIf(`、`.todoIf(`、`unittest.skip`；用例数下降是全套件的，任何一条声明都能放行它。
+- 真实验证：在 `tests/engine/context.test.ts` 加 `test.skip` 并删一条 expect，抓到标记，且 `expect()` 1091→1089（bun 的 `Ran N tests` 含被跳过的测试，所以掉的是 expect 数）；声明后两条都放行。
+
+**Status**: Complete
 
 ---
 

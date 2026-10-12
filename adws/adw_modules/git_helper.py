@@ -118,6 +118,18 @@ def diff_files(base: str) -> list[str]:
     return [line for line in out.splitlines() if line]
 
 
+def deleted_files(base: str) -> list[str]:
+    """Tracked files that exist at `base` and are gone from the working tree."""
+    out = _git("diff", "--name-only", "--diff-filter=D", base)
+    return [line for line in out.splitlines() if line]
+
+
+def added_lines(base: str, path: str) -> list[str]:
+    """The lines `path` gains between `base` and the working tree, without the leading `+`."""
+    out = _git("diff", "--unified=0", base, "--", path)
+    return [line[1:] for line in out.splitlines() if line.startswith("+") and not line.startswith("+++")]
+
+
 def diff_stat(base: str) -> str:
     return _git("diff", "--stat", base)
 

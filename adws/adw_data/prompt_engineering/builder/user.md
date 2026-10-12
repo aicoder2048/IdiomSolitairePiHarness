@@ -29,6 +29,7 @@ Respond with ONLY valid JSON matching `BuildOutput` — no prose before or after
   "changed_files": ["src/server.ts"],
   "artifacts": [],
   "commit_message": "<imperative one-line git subject for the code you changed — this is what the commit of your work will say>",
+  "weakened_tests": [],
   "notes_for_next_agent": "<how to verify this work>"
 }
 ```

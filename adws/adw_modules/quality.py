@@ -36,7 +36,15 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from .data_types import EventRecord, ProofRunner, QualityCheckResult, QualityCheckSpec, QualityResult, VerifyOutput
+from .data_types import (
+    EventRecord,
+    ProofRunner,
+    QualityCheckResult,
+    QualityCheckSpec,
+    QualityResult,
+    SuiteCounter,
+    VerifyOutput,
+)
 from .utils import now_iso, operator_env
 
 # How much of a failing command's output rides back inside the envelope. Enough
@@ -222,6 +230,14 @@ PROOF_RUNNERS = [
     ),  # fmt: skip
     ProofRunner(pattern="adws/tests/*.test.ts", argv=["node", "--test", "{file}"]),
 ]
+
+# Which files are tests, for the integrity check (adw_modules/integrity.py): the same set the proof runs.
+TEST_FILES = [r.pattern for r in PROOF_RUNNERS]
+
+# The suite whose test and expect() counts must not drop below the baseline's. `bun test`
+# prints both (bunfig.toml roots it at tests/); pytest prints no assertion count, so the
+# Python tests are checked for skip markers and deletion only.
+SUITE_COUNTER = SuiteCounter(argv=["bun", "test"], covers=["tests/*.test.ts"])
 
 
 def run_tests(run) -> QualityResult:

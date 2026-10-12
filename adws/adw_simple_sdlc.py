@@ -8,10 +8,10 @@ Usage:
     uv run adws/adw_simple_sdlc.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
 Phases: engineer(request) -> planner -> git(commit_plan)
-        -> builder -> code(test+lint) -> code(prove: red/green)
-           [-> builder(fix | reproduce) -> code(test+lint) -> code(prove) ... bounded]
+        -> builder -> code(test+lint) -> code(prove: red/green) -> code(integrity)
+           [-> builder(fix | reproduce | restore) -> code(test+lint) -> code(prove) -> code(integrity) ... bounded]
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
-        -> code(retest: test+lint, then prove, only if a revision changed code)
+        -> code(retest: test+lint, then prove and integrity, only if a revision changed code)
         -> git(commit_build) -> code(changes) -> documenter -> git(commit_docs)
 
 Three commits, three work products, three authors. The plan, the code, and the
@@ -38,6 +38,12 @@ and on HEAD, where it must pass. For `--kind bug` that is binding and a failed
 proof sends the builder back to write a test that reproduces the bug; for any
 other kind it is recorded as evidence only.
 
+A green suite also cannot say whether it was made green by weakening it, so the
+integrity check (adw_modules/integrity.py) follows: a skip/focus marker added to
+a test, a deleted test file, or fewer tests or expect() calls than the baseline
+sends the builder back to restore them — for every kind — unless the builder
+declared that weakening in `weakened_tests`, which passes and is kept for the PR.
+
 The code commit lands after verification, not straight after the build: fixes
 and revisions are part of the same work product, and red code has no business
 on the branch. A run that fails verification therefore leaves the plan
@@ -52,12 +58,13 @@ pinned before the first commit phase and printed in the request phase.
 import argparse
 import sys
 
-from adw_modules import agents, changes, gates, git_helper, proof, quality, session, utils
+from adw_modules import agents, changes, gates, git_helper, integrity, proof, quality, session, utils
 from adw_modules.data_types import (
     AgentCall,
     BuildOutput,
     ChangeCapture,
     DocumentOutput,
+    IntegrityParams,
     PhaseParams,
     PlanOutput,
     ProofParams,
@@ -120,6 +127,36 @@ def main(
             )
         return result
 
+    def check_integrity(name: str):
+        """Whether the change weakened the tests that judge it — undeclared weakening fails, for every kind."""
+        with run.phase(
+            PhaseParams(
+                name=name,
+                kind="code",
+                owner="integrity",
+                description="Compare the tests with the baseline: no undeclared skip, deletion or lost assertions",
+            )
+        ) as ph:
+            declared = [w for b in builds for w in b.weakened_tests]
+            params = IntegrityParams(
+                baseline=baseline, tests=quality.TEST_FILES, counter=quality.SUITE_COUNTER, declared=declared
+            )
+            result = integrity.check(run, params)
+            counts = (
+                f"{result.base_counts.tests}→{result.head_counts.tests} tests, "
+                f"{result.base_counts.expects}→{result.head_counts.expects} expect() calls"
+                if result.base_counts and result.head_counts
+                else "not compared"
+            )
+            ph.log(
+                passed=result.passed,
+                findings=f"{len(result.failures)} undeclared, {len(result.findings) - len(result.failures)} declared",
+                counts=counts,
+                unverified="; ".join(result.unverified),
+                artifacts=", ".join(result.artifacts),
+            )
+        return result
+
     with run.phase(
         PhaseParams(name="request", kind="engineer", owner=run.engineer, description="Capture the incoming ask")
     ) as ph:
@@ -154,6 +191,7 @@ def main(
 
     test = None
     proven = None
+    intact = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(
             PhaseParams(
@@ -169,15 +207,26 @@ def main(
         if test.passed:
             proven = prove(f"prove_{i}")
             if proven.passed:
-                break
-            repair = PhaseParams(
-                name=f"reproduce_{i}",
-                kind="agent",
-                owner="builder",
-                retries=1,
-                description="Write the test that fails without the fix — the proof found none on the baseline",
-            )
-            previous = proof.as_envelope(proven)
+                intact = check_integrity(f"integrity_{i}")
+                if intact.passed:
+                    break
+                repair = PhaseParams(
+                    name=f"restore_{i}",
+                    kind="agent",
+                    owner="builder",
+                    retries=1,
+                    description="Restore the tests the change weakened, or declare why weakening them is right",
+                )
+                previous = integrity.as_envelope(intact)
+            else:
+                repair = PhaseParams(
+                    name=f"reproduce_{i}",
+                    kind="agent",
+                    owner="builder",
+                    retries=1,
+                    description="Write the test that fails without the fix — the proof found none on the baseline",
+                )
+                previous = proof.as_envelope(proven)
         else:
             repair = PhaseParams(
                 name=f"fix_{i}",
@@ -244,8 +293,9 @@ def main(
             record(ph, test)
         if test.passed:
             proven = prove("reprove")
+            intact = check_integrity("reintegrity")
 
-    # Red tests, a failed proof or a rejected review stop the chain here: the code stays
+    # Red tests, a failed proof, weakened tests or a rejected review stop the chain here: the code stays
     # uncommitted and nothing is documented, because there is nothing worth
     # describing yet. The plan commit stands — it is a record of what was asked.
     verified = (
@@ -253,6 +303,8 @@ def main(
         and test.passed
         and proven is not None
         and proven.passed
+        and intact is not None
+        and intact.passed
         and review is not None
         and review.approved
     )
@@ -262,7 +314,7 @@ def main(
                 name="commit_build",
                 kind="code",
                 owner="git",
-                description="Land the code only now: green suite and lint, approved review",
+                description="Land the code only now: green suite and lint, proof and integrity hold, approved review",
             )
         ) as ph:
             message = git_helper.build_commit_message(builds, run.adw_id)
@@ -319,7 +371,8 @@ def main(
             commit(ph, document)
 
     return run.finish(
-        accepted=verified, reason="the suite, lint, the red/green proof or the review never came back clean"
+        accepted=verified,
+        reason="the suite, lint, the red/green proof, the test-integrity check or the review never came back clean",
     )
 
 

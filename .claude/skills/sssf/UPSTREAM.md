@@ -39,6 +39,7 @@
 | `adws/adw_modules/quality.py`（仅 adws/） | `test()` 的 argv 改为 `just test`：套件在 justfile 里只定义一次，quality 门与规则 16 同口径（原先只跑 pytest + opt-trader 的 lib.test，issue #7）；测试 `adws/tests/test_quality_gate.py` | 项目接线，不上游 |
 
 | `adws/adw_modules/{baseline,proof}.py` + `data_types.py`（`Proof*`）+ `quality.PROOF_RUNNERS` + `adw_simple_sdlc`（`--kind`、`prove_i` / `reproduce_i` / `reprove`）+ `adw_issue`（传 kind）+ `issue/bug.md`（仅 adws/） | 红绿证明：测试变绿后，把本次新增或修改的测试文件复制进基线 commit 的临时 worktree（放在仓库外，共用 `node_modules` 的 symlink）跑一次，要求失败；在 HEAD 上再跑一次，要求通过。`bug` 不满足就交给 builder 补复现测试，其它 kind 只记录；测试 `adws/tests/test_proof.py` | 本地需求（借鉴 evidence-driven-testing，见 IMPLEMENTATION_PLAN.md Stage 1），不上游 |
+| `adws/adw_modules/integrity.py` + `data_types.py`（`WeakenedTest`、`BuildOutput.weakened_tests`、`Integrity*`、`Suite*`）+ `git_helper.{deleted_files,added_lines}` + `quality.{TEST_FILES,SUITE_COUNTER}` + `proof.execute` + `adw_simple_sdlc`（`integrity_i` / `restore_i` / `reintegrity`）+ `adw_build_test`（`prove_i` 只记录、`integrity_i` / `restore_i`）+ builder `system.md` / `user.md`（仅 adws/） | 测试完整性：测试文件新增行里的跳过/聚焦标记、删除的测试文件、`bun test` 的用例数或 `expect()` 数低于基线（在基线临时 worktree 和 HEAD 各跑一次），没在 `weakened_tests` 里声明的一律退回 builder，所有 kind 都拦；声明过的放行并保留给 PR；pytest 只查标记和删除，用例数列为未验证；测试 `adws/tests/test_integrity.py` | 本地需求（见 IMPLEMENTATION_PLAN.md Stage 2），不上游 |
 
 ## 升级流程
 

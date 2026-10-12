@@ -94,9 +94,18 @@ class PlanOutput(EnvelopeBase):
     commit_message: str = ""
 
 
+class WeakenedTest(BaseModel):
+    """A test the builder deleted, skipped or loosened on purpose, and why."""
+
+    file: str  # repo-relative path of the test file
+    reason: str
+
+
 class BuildOutput(EnvelopeBase):
     changed_files: list[str] = Field(default_factory=list)
     commit_message: str = ""  # consumed by the git commit phase
+    # Declared weakening: the integrity check passes these and the PR shows them first.
+    weakened_tests: list[WeakenedTest] = Field(default_factory=list)
 
 
 class ScoutFinding(BaseModel):
@@ -305,6 +314,49 @@ class ProofResult(BaseModel):
     checks: list[ProofCheck] = Field(default_factory=list)
     failures: list[str] = Field(default_factory=list)
     artifacts: list[str] = Field(default_factory=list)
+
+
+# ── Test integrity (deterministic) ───────────────────────────────────────────
+
+
+class SuiteCounter(BaseModel):
+    """A suite command whose output carries bun's summary lines, run on the baseline and on HEAD."""
+
+    argv: list[str]
+    covers: list[str]  # fnmatch patterns of the test files it counts
+    timeout_seconds: int = 600
+
+
+class IntegrityParams(BaseModel):
+    baseline: str
+    tests: list[str]  # fnmatch patterns that make a file a test; `*` crosses `/`
+    counter: SuiteCounter | None = None
+    declared: list[WeakenedTest] = Field(default_factory=list)
+
+
+class SuiteCounts(BaseModel):
+    tests: int
+    expects: int
+
+
+class IntegrityFinding(BaseModel):
+    file: str  # "" when it is the whole suite that shrank
+    problem: str
+    declared: bool = False  # the builder declared weakening this file (or, for the suite, anything)
+
+
+class IntegrityResult(BaseModel):
+    """Every way the change weakened the tests, and whether each one was declared."""
+
+    passed: bool  # no undeclared finding
+    baseline: str = ""
+    base_counts: SuiteCounts | None = None
+    head_counts: SuiteCounts | None = None
+    findings: list[IntegrityFinding] = Field(default_factory=list)
+    declared: list[WeakenedTest] = Field(default_factory=list)
+    failures: list[str] = Field(default_factory=list)
+    artifacts: list[str] = Field(default_factory=list)
+    unverified: list[str] = Field(default_factory=list)  # what this check could not see
 
 
 # ── Agent calls ──────────────────────────────────────────────────────────────

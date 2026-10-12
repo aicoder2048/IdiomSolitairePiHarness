@@ -7,7 +7,8 @@
 Usage:
     uv run adws/adw_build_test.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
-Phases: engineer(request) -> builder -> code(test+lint) [-> builder(fix) -> code(test+lint) ... bounded]
+Phases: engineer(request) -> builder -> code(test+lint) -> code(prove) -> code(integrity)
+        [-> builder(fix | restore) -> code(test+lint) -> code(prove) -> code(integrity) ... bounded]
 
 Testing and lint are CODE. Their commands are written down in adw_modules/quality.py,
 so running it needs no judgement — only repairing it does. Failures reach the
@@ -17,13 +18,20 @@ agent's report came through, so the repair loop is unchanged.
 A failing suite or lint does NOT fail its phase: the runner did its job, the code is
 what failed. It fails the run, checked at the end, after the bounded fix loop
 has had its chances.
+
+A green suite is followed by two comparisons with the commit the run started
+from. The red/green proof (adw_modules/proof.py) is recorded only: this chain
+does not know what kind of work it was given. The integrity check
+(adw_modules/integrity.py) is binding: a skip marker added to a test, a deleted
+test file, or fewer tests or expect() calls than the baseline sends the builder
+back, unless it declared that weakening in `weakened_tests`.
 """
 
 import argparse
 import sys
 
-from adw_modules import agents, gates, quality, session, utils
-from adw_modules.data_types import AgentCall, BuildOutput, PhaseParams
+from adw_modules import agents, gates, git_helper, integrity, proof, quality, session, utils
+from adw_modules.data_types import AgentCall, BuildOutput, IntegrityParams, PhaseParams, ProofParams
 
 REQUIRED_AGENTS = ["builder"]
 MAX_FIX_LOOPS = 3
@@ -33,10 +41,52 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
     run = session.ensure(cfg, adw_id)
+    baseline = git_helper.rev("HEAD")  # what the tests are compared with
 
     def record(ph, result) -> None:
         passed = sum(1 for check in result.checks if check.passed)
         ph.log(passed=result.passed, checks=f"{passed}/{len(result.checks)}", artifacts=", ".join(result.artifacts))
+
+    def prove(name: str) -> None:
+        """The red/green record of the tests this run changed — evidence only in this chain."""
+        with run.phase(
+            PhaseParams(
+                name=name,
+                kind="code",
+                owner="proof",
+                description="Record each changed test on the baseline and on HEAD — evidence, never binding here",
+            )
+        ) as ph:
+            result = proof.prove(run, ProofParams(baseline=baseline, runners=quality.PROOF_RUNNERS))
+            n = len(result.checks)
+            ph.log(
+                red=f"{sum(c.red for c in result.checks)}/{n} red on baseline",
+                green=f"{sum(c.green for c in result.checks)}/{n} green on HEAD",
+                artifacts=", ".join(result.artifacts),
+            )
+
+    def check_integrity(name: str):
+        """Whether the change weakened the tests that judge it — undeclared weakening fails."""
+        with run.phase(
+            PhaseParams(
+                name=name,
+                kind="code",
+                owner="integrity",
+                description="Compare the tests with the baseline: no undeclared skip, deletion or lost assertions",
+            )
+        ) as ph:
+            declared = [w for b in builds for w in b.weakened_tests]
+            params = IntegrityParams(
+                baseline=baseline, tests=quality.TEST_FILES, counter=quality.SUITE_COUNTER, declared=declared
+            )
+            result = integrity.check(run, params)
+            ph.log(
+                passed=result.passed,
+                findings=f"{len(result.failures)} undeclared, {len(result.findings) - len(result.failures)} declared",
+                unverified="; ".join(result.unverified),
+                artifacts=", ".join(result.artifacts),
+            )
+        return result
 
     with run.phase(
         PhaseParams(name="request", kind="engineer", owner=run.engineer, description="Capture the incoming ask")
@@ -46,9 +96,10 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     with run.phase(
         PhaseParams(name="build", kind="agent", owner="builder", retries=1, description="Implement the request")
     ) as ph:
-        ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, gates=[gates.diff_matches_claims]))
+        builds = [ph.call(AgentCall(output_type=BuildOutput, prompt=prompt, gates=[gates.diff_matches_claims]))]
 
     test = None
+    intact = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(
             PhaseParams(
@@ -62,29 +113,40 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             record(ph, test)
 
         if test.passed:
-            break
-
-        with run.phase(
-            PhaseParams(
+            prove(f"prove_{i}")
+            intact = check_integrity(f"integrity_{i}")
+            if intact.passed:
+                break
+            repair = PhaseParams(
+                name=f"restore_{i}",
+                kind="agent",
+                owner="builder",
+                retries=1,
+                description="Restore the tests the change weakened, or declare why weakening them is right",
+            )
+            previous = integrity.as_envelope(intact)
+        else:
+            repair = PhaseParams(
                 name=f"fix_{i}",
                 kind="agent",
                 owner="builder",
                 retries=1,
                 description="Repair what the suite or lint reported, from its verbatim output",
             )
-        ) as ph:
-            ph.call(
-                AgentCall(
-                    output_type=BuildOutput,
-                    prompt=prompt,
-                    previous=quality.as_envelope(test, "tests and lint"),
-                    gates=[gates.diff_matches_claims],
+            previous = quality.as_envelope(test, "tests and lint")
+
+        with run.phase(repair) as ph:
+            builds.append(
+                ph.call(
+                    AgentCall(
+                        output_type=BuildOutput, prompt=prompt, previous=previous, gates=[gates.diff_matches_claims]
+                    )
                 )
             )
 
     return run.finish(
-        accepted=test is not None and test.passed,
-        reason=f"the suite or lint still failed after {MAX_FIX_LOOPS} fix attempt(s)",
+        accepted=test is not None and test.passed and intact is not None and intact.passed,
+        reason=f"the suite, lint or the test-integrity check still failed after {MAX_FIX_LOOPS} fix attempt(s)",
     )
 
 
