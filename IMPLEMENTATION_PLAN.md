@@ -56,7 +56,7 @@
 - 基线树在仓库根目录之外；正常退出和抛异常两种情况下都会被删除
 - 4 参数的 `main` 接收 `kind`，`adw_issue` 会把分类结果传下去（扩展 `test_adw_issue.py`）
 
-**Status**: Not Started
+**Status**: Complete
 
 ---
 

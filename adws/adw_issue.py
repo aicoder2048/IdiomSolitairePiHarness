@@ -133,11 +133,15 @@ def request_path(issue: Issue) -> Path:
     return REQUESTS / (f"issue-{issue.number}-{slug}.md" if slug else f"issue-{issue.number}.md")
 
 
-def run_chain(prompt: str, config: str, adw_id: str) -> int:
-    """The simple SDLC, in this process: it commits where it stands and returns its exit code."""
+def run_chain(prompt: str, config: str, adw_id: str, kind: str) -> int:
+    """The simple SDLC, in this process: it commits where it stands and returns its exit code.
+
+    The kind rides along because it changes what counts as done: a bug's test must
+    fail on the baseline and pass with the fix (adw_modules/proof.py).
+    """
     import adw_simple_sdlc  # the chain's own dependencies load only when a run actually starts
 
-    return adw_simple_sdlc.main(prompt, config, adw_id)
+    return adw_simple_sdlc.main(prompt, config, adw_id, kind)
 
 
 def git_push() -> None:
@@ -267,7 +271,7 @@ def main(
         progress.start()
         Run.listeners.append(progress.phase)
     try:
-        rc = run_chain(text, config, adw_id)
+        rc = run_chain(text, config, adw_id, work)
     except Exception as e:  # the chain raises on a failed gate or an unavailable model
         print(f"adw_issue: the chain stopped: {e}", file=sys.stderr)
         rc = 1

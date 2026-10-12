@@ -38,6 +38,8 @@
 | `adws/adw_modules/runner.py`（仅 adws/） | `Run.listeners`：阶段结束（成功或失败）时回调，抛错的 listener 记录后移除；`adw_issue` 用它把工厂进度写成 issue 下一条原地编辑的评论；测试 `adws/tests/test_phase_listeners.py` | 项目接线，不上游 |
 | `adws/adw_modules/quality.py`（仅 adws/） | `test()` 的 argv 改为 `just test`：套件在 justfile 里只定义一次，quality 门与规则 16 同口径（原先只跑 pytest + opt-trader 的 lib.test，issue #7）；测试 `adws/tests/test_quality_gate.py` | 项目接线，不上游 |
 
+| `adws/adw_modules/{baseline,proof}.py` + `data_types.py`（`Proof*`）+ `quality.PROOF_RUNNERS` + `adw_simple_sdlc`（`--kind`、`prove_i` / `reproduce_i` / `reprove`）+ `adw_issue`（传 kind）+ `issue/bug.md`（仅 adws/） | 红绿证明：测试变绿后，把本次新增或修改的测试文件复制进基线 commit 的临时 worktree（放在仓库外，共用 `node_modules` 的 symlink）跑一次，要求失败；在 HEAD 上再跑一次，要求通过。`bug` 不满足就交给 builder 补复现测试，其它 kind 只记录；测试 `adws/tests/test_proof.py` | 本地需求（借鉴 evidence-driven-testing，见 IMPLEMENTATION_PLAN.md Stage 1），不上游 |
+
 ## 升级流程
 
 1. 用上游新版本覆盖本目录（保留本文件），`git diff` 检查本地补丁是否已被上游吸收。

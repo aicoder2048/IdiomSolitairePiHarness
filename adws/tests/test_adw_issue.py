@@ -227,6 +227,14 @@ def test_success_pushes_then_opens_a_pr_titled_after_the_issue(repo, gh_path, mo
     assert "https://github.com/o/r/pull/9" in capsys.readouterr().out
 
 
+def test_the_chain_is_told_the_kind_so_a_bug_must_prove_its_test(repo, gh_path, monkeypatch):
+    fake_gh(gh_path, issue={**ISSUE, "labels": [{"name": "bug"}]})
+    seen = {}
+    monkeypatch.setattr(adw_issue, "run_chain", lambda prompt, config, adw_id, kind: seen.setdefault("kind", kind))
+    adw_issue.main(7, no_pr=True)
+    assert seen["kind"] == "bug"
+
+
 def test_no_pr_skips_push_and_pr(repo, gh_path, monkeypatch):
     log = fake_gh(gh_path)
     monkeypatch.setattr(adw_issue, "run_chain", lambda *a, **k: 0)

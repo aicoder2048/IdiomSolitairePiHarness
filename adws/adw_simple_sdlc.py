@@ -8,9 +8,10 @@ Usage:
     uv run adws/adw_simple_sdlc.py "<prompt or path/to/prompt.md>" [--config adws/adw_sssf_config/sssf.config.yaml] [--adw-id a1b2c3d4]
 
 Phases: engineer(request) -> planner -> git(commit_plan)
-        -> builder -> code(test+lint) [-> builder(fix) -> code(test+lint) ... bounded]
+        -> builder -> code(test+lint) -> code(prove: red/green)
+           [-> builder(fix | reproduce) -> code(test+lint) -> code(prove) ... bounded]
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
-        -> code(retest: test+lint, only if a revision changed code)
+        -> code(retest: test+lint, then prove, only if a revision changed code)
         -> git(commit_build) -> code(changes) -> documenter -> git(commit_docs)
 
 Three commits, three work products, three authors. The plan, the code, and the
@@ -30,6 +31,13 @@ neither can answer the other's. A revision that closes a review finding
 re-enters the suite, so the tree that gets committed is the tree that was both
 tested and approved.
 
+A green suite cannot say whether a new test would have caught the bug, so a
+green run is followed by the red/green proof (adw_modules/proof.py): every test
+the change added or edited is run on the baseline commit, where it must fail,
+and on HEAD, where it must pass. For `--kind bug` that is binding and a failed
+proof sends the builder back to write a test that reproduces the bug; for any
+other kind it is recorded as evidence only.
+
 The code commit lands after verification, not straight after the build: fixes
 and revisions are part of the same work product, and red code has no business
 on the branch. A run that fails verification therefore leaves the plan
@@ -44,7 +52,7 @@ pinned before the first commit phase and printed in the request phase.
 import argparse
 import sys
 
-from adw_modules import agents, changes, gates, git_helper, quality, session, utils
+from adw_modules import agents, changes, gates, git_helper, proof, quality, session, utils
 from adw_modules.data_types import (
     AgentCall,
     BuildOutput,
@@ -52,6 +60,7 @@ from adw_modules.data_types import (
     DocumentOutput,
     PhaseParams,
     PlanOutput,
+    ProofParams,
     ReviewOutput,
 )
 
@@ -66,7 +75,15 @@ DOCUMENT_NOTES = (
 )
 
 
-def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw_id: str | None = None) -> int:
+KINDS = ("bug", "feature", "chore", "docs")
+
+
+def main(
+    prompt: str,
+    config: str = "adws/adw_sssf_config/sssf.config.yaml",
+    adw_id: str | None = None,
+    kind: str | None = None,
+) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
     run = session.ensure(cfg, adw_id)
@@ -81,6 +98,27 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         """Log a deterministic block's verdict — the same shape every ADW uses."""
         passed = sum(1 for check in result.checks if check.passed)
         ph.log(passed=result.passed, checks=f"{passed}/{len(result.checks)}", artifacts=", ".join(result.artifacts))
+
+    def prove(name: str):
+        """The red/green proof of the tests this run changed — binding only for a bug."""
+        with run.phase(
+            PhaseParams(
+                name=name,
+                kind="code",
+                owner="proof",
+                description="Run each changed test on the baseline (must fail) and on HEAD (must pass)",
+            )
+        ) as ph:
+            result = proof.prove(run, ProofParams(kind=kind, baseline=baseline, runners=quality.PROOF_RUNNERS))
+            n = len(result.checks)
+            ph.log(
+                passed=result.passed,
+                binding=result.required,
+                red=f"{sum(c.red for c in result.checks)}/{n} red on baseline",
+                green=f"{sum(c.green for c in result.checks)}/{n} green on HEAD",
+                artifacts=", ".join(result.artifacts),
+            )
+        return result
 
     with run.phase(
         PhaseParams(name="request", kind="engineer", owner=run.engineer, description="Capture the incoming ask")
@@ -115,6 +153,7 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
     builds = [build]  # every builder pass, in order — the first one names the commit
 
     test = None
+    proven = None
     for i in range(1, MAX_FIX_LOOPS + 1):
         with run.phase(
             PhaseParams(
@@ -128,24 +167,30 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             record(ph, test)
 
         if test.passed:
-            break
-
-        with run.phase(
-            PhaseParams(
+            proven = prove(f"prove_{i}")
+            if proven.passed:
+                break
+            repair = PhaseParams(
+                name=f"reproduce_{i}",
+                kind="agent",
+                owner="builder",
+                retries=1,
+                description="Write the test that fails without the fix — the proof found none on the baseline",
+            )
+            previous = proof.as_envelope(proven)
+        else:
+            repair = PhaseParams(
                 name=f"fix_{i}",
                 kind="agent",
                 owner="builder",
                 retries=1,
                 description="Repair what the suite or lint reported, from its verbatim output",
             )
-        ) as ph:
+            previous = quality.as_envelope(test, "tests and lint")
+
+        with run.phase(repair) as ph:
             build = ph.call(
-                AgentCall(
-                    output_type=BuildOutput,
-                    prompt=prompt,
-                    previous=quality.as_envelope(test, "tests and lint"),
-                    gates=[gates.diff_matches_claims],
-                )
+                AgentCall(output_type=BuildOutput, prompt=prompt, previous=previous, gates=[gates.diff_matches_claims])
             )
             builds.append(build)
 
@@ -197,11 +242,20 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         ) as ph:
             test = quality.run_tests_and_lint(run)
             record(ph, test)
+        if test.passed:
+            proven = prove("reprove")
 
-    # Red tests or a rejected review stop the chain here: the code stays
+    # Red tests, a failed proof or a rejected review stop the chain here: the code stays
     # uncommitted and nothing is documented, because there is nothing worth
     # describing yet. The plan commit stands — it is a record of what was asked.
-    verified = test is not None and test.passed and review is not None and review.approved
+    verified = (
+        test is not None
+        and test.passed
+        and proven is not None
+        and proven.passed
+        and review is not None
+        and review.approved
+    )
     if verified:
         with run.phase(
             PhaseParams(
@@ -264,7 +318,9 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
         ) as ph:
             commit(ph, document)
 
-    return run.finish(accepted=verified, reason="the suite, lint, or the review never came back clean")
+    return run.finish(
+        accepted=verified, reason="the suite, lint, the red/green proof or the review never came back clean"
+    )
 
 
 if __name__ == "__main__":
@@ -272,5 +328,6 @@ if __name__ == "__main__":
     parser.add_argument("prompt", help="inline text or a path to a prompt file")
     parser.add_argument("--config", default="adws/adw_sssf_config/sssf.config.yaml")
     parser.add_argument("--adw-id", default=None, help="join or pin an existing session")
+    parser.add_argument("--kind", choices=KINDS, default=None, help="kind of work; a bug must prove its test red/green")
     args = parser.parse_args()
-    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id))
+    sys.exit(main(utils.resolve_prompt(args.prompt), args.config, args.adw_id, args.kind))

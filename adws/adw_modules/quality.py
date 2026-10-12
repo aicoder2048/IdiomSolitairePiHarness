@@ -36,7 +36,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from .data_types import EventRecord, QualityCheckResult, QualityCheckSpec, QualityResult, VerifyOutput
+from .data_types import EventRecord, ProofRunner, QualityCheckResult, QualityCheckSpec, QualityResult, VerifyOutput
 from .utils import now_iso, operator_env
 
 # How much of a failing command's output rides back inside the envelope. Enough
@@ -189,6 +189,39 @@ def build(run) -> QualityCheckResult:
         ),
         run,
     )
+
+
+# How each of the project's test suites runs ONE file, for the red/green proof
+# (adw_modules/proof.py). First match wins; `*` crosses `/`; `{file}` is the path.
+# The Python runners carry the same dependencies as the justfile recipes.
+PROOF_RUNNERS = [
+    ProofRunner(pattern="tests/*.test.ts", argv=["bun", "test", "./{file}"]),
+    ProofRunner(
+        pattern="tests/test_*.py", argv=["uv", "run", "--no-project", "--with", "pytest", "pytest", "-q", "{file}"]
+    ),
+    ProofRunner(
+        pattern="adws/tests/test_*.py",
+        argv=[
+            "uv",
+            "run",
+            "--no-project",
+            "--with",
+            "pytest",
+            "--with",
+            "pydantic",
+            "--with",
+            "pyyaml",
+            "--with",
+            "python-dotenv",
+            "--with",
+            "rich",
+            "pytest",
+            "-q",
+            "{file}",
+        ],
+    ),  # fmt: skip
+    ProofRunner(pattern="adws/tests/*.test.ts", argv=["node", "--test", "{file}"]),
+]
 
 
 def run_tests(run) -> QualityResult:

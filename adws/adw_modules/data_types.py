@@ -252,6 +252,61 @@ class VerifyOutput(EnvelopeBase):
     failures: list[str] = Field(default_factory=list)
 
 
+# ── Red/green proof (deterministic) ──────────────────────────────────────────
+
+
+class ProofRunner(BaseModel):
+    """How to run one kind of test file on its own.
+
+    `pattern` is an fnmatch glob on the repo-relative path (`*` crosses `/`), and
+    the first runner that matches a file wins. `{file}` in argv is the file's path.
+    """
+
+    pattern: str
+    argv: list[str]
+    timeout_seconds: int = 300
+
+
+class ProofParams(BaseModel):
+    """Everything proof.prove() needs. Only kind "bug" makes the proof binding."""
+
+    kind: str | None = None
+    baseline: str  # the commit the run started from
+    runners: list[ProofRunner]
+
+
+class ProofCheck(BaseModel):
+    """One changed test file, run on the baseline and on HEAD."""
+
+    file: str
+    command: str
+    base_returncode: int
+    head_returncode: int
+    base_tail: str = ""
+    head_tail: str = ""
+    output_artifact: str = ""
+
+    @property
+    def red(self) -> bool:
+        """It failed on the baseline: the test reproduces something the change fixed."""
+        return self.base_returncode != 0
+
+    @property
+    def green(self) -> bool:
+        return self.head_returncode == 0
+
+
+class ProofResult(BaseModel):
+    """Every changed test's red/green record, and whether the proof holds."""
+
+    required: bool  # binding for this kind of work: a failure sends the builder back
+    passed: bool
+    baseline: str = ""
+    checks: list[ProofCheck] = Field(default_factory=list)
+    failures: list[str] = Field(default_factory=list)
+    artifacts: list[str] = Field(default_factory=list)
+
+
 # ── Agent calls ──────────────────────────────────────────────────────────────
 
 
