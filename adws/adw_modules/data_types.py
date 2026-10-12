@@ -360,7 +360,53 @@ class IntegrityResult(BaseModel):
     unverified: list[str] = Field(default_factory=list)  # what this check could not see
 
 
+# ── TUI screenshots (deterministic) ──────────────────────────────────────────
+
+
+class TuiConfig(BaseModel):
+    """How this project captures its TUI as text: a command, and the scene file it reads."""
+
+    # Gets {scenes} {out} {repo}; writes <scene>.txt and manifest.json to {out} (scripts/tui_capture.py).
+    argv: list[str]
+    scenes: str  # repo-relative scene file, read from HEAD for both trees
+    timeout_seconds: int = 300
+    uncaptured: list[str] = Field(default_factory=list)  # screens no scene reaches, said in every PR
+
+
+class TuiParams(BaseModel):
+    config: TuiConfig | None  # None = this project captures no TUI
+    baseline: str
+
+
+class TuiScene(BaseModel):
+    name: str
+    before: str = ""
+    after: str = ""
+    error: str = ""  # either side failed to capture it; then before/after are not compared
+
+    @property
+    def changed(self) -> bool:
+        return not self.error and self.before != self.after
+
+
+class TuiResult(BaseModel):
+    """The same scenes captured on the baseline and on HEAD."""
+
+    configured: bool
+    baseline: str = ""
+    scenes: list[TuiScene] = Field(default_factory=list)
+    error: str = ""  # the capture itself failed on a side: no scene is compared
+    uncaptured: list[str] = Field(default_factory=list)
+    artifacts: list[str] = Field(default_factory=list)
+
+
 # ── Evidence bundle (deterministic) ──────────────────────────────────────────
+
+
+class ModelUsage(BaseModel):
+    model: str
+    tokens: int = 0
+    cost: float = 0.0  # Pi's list price, whether or not the provider bills by it
 
 
 class EvidenceInput(BaseModel):
@@ -381,9 +427,12 @@ class EvidenceInput(BaseModel):
     integrity: IntegrityResult | None = None
     new_tests: list[str] | None = None
     review: ReviewOutput | None = None
+    tui: TuiResult | None = None
     unverified: list[str] = Field(default_factory=list)  # the project's standing list (EvidenceConfig)
     tokens: int = 0
     cost: float = 0.0
+    usage: list[ModelUsage] = Field(default_factory=list)  # per model, in the order first used
+    subscription: list[str] = Field(default_factory=list)  # providers whose cost is list price, not charged
 
 
 # ── Agent calls ──────────────────────────────────────────────────────────────
@@ -498,6 +547,9 @@ class ObservabilityConfig(BaseModel):
 class EvidenceConfig(BaseModel):
     # What this project's factory never checks, stated in every PR (e.g. a paid smoke test).
     unverified: list[str] = Field(default_factory=list)
+    # Providers billed by subscription (`openai-codex`): Pi still prices their tokens, nobody pays it.
+    subscription: list[str] = Field(default_factory=list)
+    tui: TuiConfig | None = None
 
 
 class SSSFConfig(BaseModel):

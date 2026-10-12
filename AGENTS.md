@@ -10,7 +10,7 @@
 | `src/extension/` | Pi extension：`input` 拦截、`submit_idiom` 工具、`context` 裁剪、命令、仪表盘与卡片 |
 | `tests/engine/`、`tests/extension/` | bun 测试；胶水层用 `tests/extension/fake-pi.ts` 的假 `ExtensionAPI` 驱动 |
 | `scripts/smoke.ts` | 联网冒烟（RPC 模式真打两回合） |
-| `scripts/tui_capture.py`、`scripts/tui_scenes.example.json` | 通用隔离 TUI 文本截屏引擎及场景示例；离线假运行器测试在 `tests/test_tui_capture.py` |
+| `scripts/tui_capture.py`、`scripts/tui_scenes.json` | 通用隔离 TUI 文本截屏引擎及本项目的场景（工厂经 `evidence.tui` 调用）；离线假运行器测试在 `tests/test_tui_capture.py` |
 | `adws/`、`scripts/autoqueue.py` | SSSF 软件工厂（Python），来源与本地补丁见 `.claude/skills/sssf/UPSTREAM.md` |
 
 ## 规则
@@ -26,5 +26,5 @@
 9. **界面**：文字用中文；涉及终端宽度时用 `@earendil-works/pi-tui` 的 `visibleWidth()` / `truncateToWidth()`，不要用 `string.length`（中文是双宽）。逻辑不能依赖渲染：RPC、JSON、print 模式下没有 widget。
 10. **计费**：游戏 Bot 用 `deepseek/*`（按量）；工厂 roster 用 `openai-codex/*`（订阅）和 `deepseek/*`。不得引入 `anthropic/*` 或其它按量 provider。
 11. **密钥**：`.env` 不入库（只留 `.env.example`）。`adws/adw_data/harness_engineering/dev_guard.ts` 拦截工厂 agent 读写 `.env*`、`~/.pi/agent/auth.json`、gh 配置，以及 `gh` 和改动 git 历史的命令——提交、推送、开 PR 是代码的事。
-12. **工厂接活**：人给**自己开的** issue 打一个类型标签（`bug` / `enhancement` / `chore` / `documentation`）和 `factory:queued`；`just autoqueue` 认领（`factory:running`），在 `.autoqueue/worktrees/issue-N` 里跑 `just issue N`，成功标 `factory:pr-open`，失败标 `factory:needs-human` 并保留 worktree 与分支，从不自动重试。PR 正文就是工厂的证据包（`Closes #N` 之后是这次 run 的 `evidence.md`：命令和退出码、红绿证明、测试完整性、reviewer 逐条核对、未验证项），审 PR 看它就够，不用翻本地 session。合并 PR 是唯一的人工闸门；合并后下一轮 `just autoqueue` 只清掉已关闭 issue 上的 `factory:pr-open`，其他标签不动。
+12. **工厂接活**：人给**自己开的** issue 打一个类型标签（`bug` / `enhancement` / `chore` / `documentation`）和 `factory:queued`；`just autoqueue` 认领（`factory:running`），在 `.autoqueue/worktrees/issue-N` 里跑 `just issue N`，成功标 `factory:pr-open`，失败标 `factory:needs-human` 并保留 worktree 与分支，从不自动重试。PR 正文就是工厂的证据包（`Closes #N` 之后是这次 run 的 `evidence.md`：命令和退出码、红绿证明、测试完整性、基线与 HEAD 的界面截屏对比、reviewer 逐条核对、未验证项、按计费方式拆开的成本），审 PR 看它就够，不用翻本地 session。合并 PR 是唯一的人工闸门；合并后下一轮 `just autoqueue` 只清掉已关闭 issue 上的 `factory:pr-open`，其他标签不动。
 13. **工厂改 PR**：工厂以操作者本人的账号开 PR，GitHub 不允许对自己的 PR 点 Request changes，所以触发靠标签：人照常留 review / 行内评论，然后给 PR 打 `factory:revise`；`just autoqueue-feedback` 在该分支的 worktree 里跑 `just pr-feedback N`（builder → `just test` 修复循环 → 提交、推送、在 PR 上回复）。工厂发的每条评论都带 `<!-- factory -->`，不会被当成意见读回；只有工厂上次回复之后的意见才算。合并后 GitHub 自动删远端分支。

@@ -186,7 +186,7 @@ def execute(run, phase: Phase, call: AgentCall) -> EnvelopeBase:
         result, active_model = call_with_fallback(
             lambda model: run_pi(model, prompt_text), active_model, fallback, on_fallback
         )
-        run.add_usage(result.tokens, result.cost)
+        run.add_usage(result.tokens, result.cost, active_model)
         spent.merge(result.usage)
         latest = result
         return result

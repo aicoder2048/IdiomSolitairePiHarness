@@ -16,7 +16,7 @@ from pathlib import Path
 
 from . import agents, git_helper
 from .console import Console
-from .data_types import AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams
+from .data_types import AgentCall, EnvelopeBase, EventRecord, ModelUsage, Phase, PhaseParams
 from .utils import ensure_dir, now_iso
 
 
@@ -62,6 +62,7 @@ class Run:
         self.tree_before: dict[str, str] | None = None  # set per agent call by agents.execute
         self.tokens = 0
         self.cost = 0.0
+        self.usage: dict[str, ModelUsage] = {}  # per model, for the evidence bundle's cost section
         self._seq = tracer.max_phase_seq(adw_id)  # a joined run continues the sequence
         self.repo_root = git_helper.repo_root()  # where every agent is spawned to work
         self.session_dir = ensure_dir(Path(cfg.defaults.data_dir) / "sessions" / adw_id)
@@ -75,9 +76,12 @@ class Run:
         self._agent_map_path.write_text(json.dumps(self.agent_map, indent=2))
 
     # ── usage (run totals mirror what the tracer accumulates in sqlite) ─────
-    def add_usage(self, tokens: int, cost: float) -> None:
+    def add_usage(self, tokens: int, cost: float, model: str = "") -> None:
         self.tokens += tokens
         self.cost += cost
+        spent = self.usage.setdefault(model, ModelUsage(model=model))
+        spent.tokens += tokens
+        spent.cost += cost
         self.tracer.session_add_usage(self.adw_id, tokens, cost)
 
     # ── the phase primitive ─────────────────────────────────────────────────

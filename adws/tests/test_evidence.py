@@ -32,6 +32,8 @@ from adw_modules.data_types import (  # noqa: E402
     ReviewFinding,
     ReviewOutput,
     SuiteCounts,
+    TuiResult,
+    TuiScene,
     WeakenedTest,
 )
 
@@ -44,9 +46,10 @@ HEADINGS = [
     "## 5. 红绿证明",
     "## 6. 测试完整性",
     "## 7. 新增的测试",
-    "## 8. Reviewer 逐条核对",
-    "## 9. 未验证项",
-    "## 10. 成本",
+    "## 8. 界面截屏",
+    "## 9. Reviewer 逐条核对",
+    "## 10. 未验证项",
+    "## 11. 成本",
 ]
 BUN_LOG = """$ just test
 exit: 0
@@ -116,6 +119,11 @@ def full(tmp_path: Path, **changes) -> EvidenceInput:
             approved=True,
             findings=[ReviewFinding(requirement="超时结算", met=True, evidence="src/engine/game.ts:42")],
         ),
+        tui=TuiResult(
+            configured=True,
+            baseline="a" * 40,
+            scenes=[TuiScene(name="status", before="📊 状态（卡片）", after="╭─ 📊 状态 ─╮"), TuiScene(name="help")],
+        ),
         unverified=["未运行 `just smoke`（按量计费）"],
         tokens=123456,
         cost=0.4321,
@@ -126,7 +134,7 @@ def full(tmp_path: Path, **changes) -> EvidenceInput:
 # --- the shape ---------------------------------------------------------------------------------------
 
 
-def test_a_full_bundle_has_all_ten_sections_in_order(tmp_path):
+def test_a_full_bundle_has_all_eleven_sections_in_order(tmp_path):
     text = evidence.render(full(tmp_path))
     positions = [text.index(h) for h in HEADINGS]
     assert positions == sorted(positions)
@@ -137,8 +145,8 @@ def test_a_section_that_did_not_run_says_so_instead_of_vanishing(tmp_path):
     bare = EvidenceInput(adw_id="cafe1234", workflow="adw_build_test", accepted=False, reason="the suite failed")
     text = evidence.render(bare)
     assert all(h in text for h in HEADINGS)
-    # quality, proof, integrity, new tests, review
-    assert text.count(evidence.NOT_RUN) == 5
+    # quality, proof, integrity, new tests, screenshots, review
+    assert text.count(evidence.NOT_RUN) == 6
     assert "the suite failed" in text
 
 
@@ -182,7 +190,7 @@ def test_pipes_in_review_cells_are_escaped(tmp_path):
         findings=[ReviewFinding(requirement="a | b", met=False, evidence="x|y\nsecond line")],
         blocking=["fix a | b"],
     )
-    text = section(evidence.render(full(tmp_path, review=review)), 8)
+    text = section(evidence.render(full(tmp_path, review=review)), 9)
     assert r"a \| b" in text and r"x\|y<br>second line" in text
     assert "fix a | b" in text  # a list item, not a cell
 
@@ -200,7 +208,7 @@ def test_declared_weakening_comes_before_everything_else(tmp_path):
 
 
 def test_cost_is_tokens_and_dollars(tmp_path):
-    text = section(evidence.render(full(tmp_path)), 10)
+    text = section(evidence.render(full(tmp_path)), 11)
     assert "123,456" in text and "$0.4321" in text
 
 
@@ -210,7 +218,7 @@ def test_cost_is_tokens_and_dollars(tmp_path):
 def test_unverified_gathers_every_source(tmp_path):
     review = ReviewOutput(status="success", approved=True, unverified=["无法在离线环境确认 TUI 渲染"])
     integrity = IntegrityResult(passed=True, unverified=["这些测试文件的用例数没有比较：adws/tests/test_x.py"])
-    text = section(evidence.render(full(tmp_path, review=review, integrity=integrity)), 9)
+    text = section(evidence.render(full(tmp_path, review=review, integrity=integrity)), 10)
     assert "just smoke" in text
     assert "无法在离线环境确认 TUI 渲染" in text
     assert "adws/tests/test_x.py" in text
@@ -218,12 +226,12 @@ def test_unverified_gathers_every_source(tmp_path):
 
 def test_a_proof_that_was_only_recorded_is_unverified(tmp_path):
     proof = ProofResult(required=False, passed=True)
-    text = section(evidence.render(full(tmp_path, kind="feature", proof=proof)), 9)
+    text = section(evidence.render(full(tmp_path, kind="feature", proof=proof)), 10)
     assert "红绿证明" in text and "feature" in text
 
 
 def test_a_dependency_change_warns_that_the_baseline_may_be_skewed(tmp_path):
-    text = section(evidence.render(full(tmp_path, changed_files=["package.json", "bun.lock"])), 9)
+    text = section(evidence.render(full(tmp_path, changed_files=["package.json", "bun.lock"])), 10)
     assert "node_modules" in text
 
 

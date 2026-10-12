@@ -2,9 +2,10 @@
 
 "Tests pass" from an agent is a claim. The bundle is the record the run's own
 code kept: each command with its exit code and the counts it printed, the
-red/green pair, the integrity comparison with the baseline, the reviewer's
-verdict requirement by requirement, and — said out loud — what nobody checked.
-It is rendered from typed results only, never from an agent's summary of them.
+red/green pair, the integrity comparison with the baseline, the screens that
+changed, the reviewer's verdict requirement by requirement, and — said out
+loud — what nobody checked. It is rendered from typed results only, never
+from an agent's summary of them.
 
 Every section is always present. One that did not run says NOT_RUN instead of
 disappearing, so a missing check reads as missing rather than as fine. Declared
@@ -21,7 +22,7 @@ import re
 from pathlib import Path
 
 from .agents import load_config
-from .data_types import EvidenceInput, IntegrityResult, ProofResult, QualityResult, ReviewOutput
+from .data_types import EvidenceInput, IntegrityResult, ModelUsage, ProofResult, QualityResult, ReviewOutput, TuiResult
 from .integrity import added_test_lines
 
 NOT_RUN = "（本次未运行）"
@@ -171,6 +172,35 @@ def _new_tests(names: list[str] | None) -> list[str]:
     return [f"- {name}" for name in names] or ["（没有）"]
 
 
+def _tui(result: TuiResult | None) -> list[str]:
+    if result is None:
+        return [NOT_RUN]
+    if not result.configured:
+        return ["本项目未配置 TUI 截屏（`evidence.tui`）"]
+    if result.error:
+        return ["❌ 截屏失败，界面没有比较：", "", _fence(result.error)]
+    lines = [f"同一组场景在基线 {_sha(result.baseline)} 和 HEAD 上各截一次（文本，已掩码）。", ""]
+    for scene in result.scenes:
+        if scene.changed:
+            lines += [
+                f"### `{scene.name}`：有变化",
+                "",
+                "基线：",
+                "",
+                _fence(scene.before),
+                "",
+                "HEAD：",
+                "",
+                _fence(scene.after),
+                "",
+            ]
+    same = [f"`{scene.name}`" for scene in result.scenes if not scene.changed and not scene.error]
+    if same:
+        lines.append(f"{len(same)} 个画面无变化：{'、'.join(same)}")
+    lines += [f"- ❌ `{scene.name}` 截屏失败（见未验证项）" for scene in result.scenes if scene.error]
+    return lines
+
+
 def _review(review: ReviewOutput | None) -> list[str]:
     if review is None:
         return [NOT_RUN]
@@ -194,13 +224,31 @@ def unverified(inp: EvidenceInput) -> list[str]:
         items += inp.integrity.unverified
     if inp.proof is not None and not inp.proof.required:
         items.append(f"红绿证明只做了记录、没有拦截（kind 为 {inp.kind or '未指定'}，不是 bug）")
+    if inp.tui is not None and inp.tui.configured:
+        if inp.tui.error:
+            items.append(f"截屏失败，界面没有比较：{inp.tui.error.splitlines()[0]}")
+        items += [f"截屏失败（`{s.name}`）：{s.error.splitlines()[0]}" for s in inp.tui.scenes if s.error]
+        items += [f"未截屏：{item}" for item in inp.tui.uncaptured]
     if DEPENDENCY_FILES & {Path(f).name for f in inp.changed_files}:
         items.append("依赖有变动：基线是借用 HEAD 的 node_modules 跑的，红绿证明和用例计数可能失真")
     return items
 
 
+def subscribed(usage: ModelUsage, providers: list[str]) -> bool:
+    """Billed by subscription: Pi prices the tokens, nobody is charged. An unknown model counts as paid."""
+    return usage.model.split("/")[0] in providers
+
+
 def _cost(inp: EvidenceInput) -> list[str]:
-    return [f"{inp.tokens:,} tokens · ${inp.cost:.4f}"]
+    lines = [f"{inp.tokens:,} tokens · 标价合计 ${inp.cost:.4f}"]
+    if not inp.usage:
+        return lines
+    lines += ["", "| 模型 | 计费 | tokens | 标价 |", "| :-- | :-- | --: | --: |"]
+    for u in inp.usage:
+        billing = "订阅（不扣费）" if subscribed(u, inp.subscription) else "按量"
+        lines.append(f"| `{u.model or '（未知）'}` | {billing} | {u.tokens:,} | ${u.cost:.4f} |")
+    paid = sum(u.cost for u in inp.usage if not subscribed(u, inp.subscription))
+    return [*lines, "", f"实际按量扣费：**${paid:.4f}**"]
 
 
 def render(inp: EvidenceInput) -> str:
@@ -212,9 +260,10 @@ def render(inp: EvidenceInput) -> str:
         ("5. 红绿证明", _proof(inp.proof)),
         ("6. 测试完整性", _integrity(inp.integrity)),
         ("7. 新增的测试", _new_tests(inp.new_tests)),
-        ("8. Reviewer 逐条核对", _review(inp.review)),
-        ("9. 未验证项", [f"- {item}" for item in unverified(inp)] or ["（无）"]),
-        ("10. 成本", _cost(inp)),
+        ("8. 界面截屏", _tui(inp.tui)),
+        ("9. Reviewer 逐条核对", _review(inp.review)),
+        ("10. 未验证项", [f"- {item}" for item in unverified(inp)] or ["（无）"]),
+        ("11. 成本", _cost(inp)),
     ]
     out = [f"# SSSF 证据包 · run `{inp.adw_id}`", "", *_weakening(inp.integrity)]
     for title, body in sections:

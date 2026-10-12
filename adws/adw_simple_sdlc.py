@@ -13,6 +13,7 @@ Phases: engineer(request) -> planner -> git(commit_plan)
         -> reviewer [-> builder(revise) -> reviewer ... bounded]
         -> code(retest: test+lint, then prove and integrity, only if a revision changed code)
         -> git(commit_build) -> code(changes) -> documenter -> git(commit_docs)
+        -> code(tui_capture: the same scenes on baseline and HEAD, if evidence.tui is set)
         -> code(evidence: context_handoff/evidence.md, accepted or not)
 
 Three commits, three work products, three authors. The plan, the code, and the
@@ -51,9 +52,11 @@ on the branch. A run that fails verification therefore leaves the plan
 committed and the working tree dirty — the spec is a real artifact either way,
 and the unfinished code stays where the engineer can see it.
 
-Last, code writes what it recorded — commands and their counts, the red/green
-pair, the integrity comparison, the reviewer's table, what nobody checked — into
-the session's evidence.md (adw_modules/evidence.py). adw_issue makes it the PR
+Last, code captures the TUI scenes of `evidence.tui` on the baseline and on HEAD
+(adw_modules/tui.py; a failed capture is an unverified item, never a gate), then
+writes what it recorded — commands and their counts, the red/green pair, the
+integrity comparison, the screens that changed, the reviewer's table, what
+nobody checked — into the session's evidence.md (adw_modules/evidence.py). adw_issue makes it the PR
 body. It is written for a run that was not accepted too: that is when it is read.
 
 The documenter measures against the commit this run STARTED from, not against
@@ -64,7 +67,7 @@ pinned before the first commit phase and printed in the request phase.
 import argparse
 import sys
 
-from adw_modules import agents, changes, evidence, gates, git_helper, integrity, proof, quality, session, utils
+from adw_modules import agents, changes, evidence, gates, git_helper, integrity, proof, quality, session, tui, utils
 from adw_modules.data_types import (
     AgentCall,
     BuildOutput,
@@ -76,6 +79,7 @@ from adw_modules.data_types import (
     PlanOutput,
     ProofParams,
     ReviewOutput,
+    TuiParams,
 )
 
 REQUIRED_AGENTS = ["planner", "builder", "reviewer", "documenter"]
@@ -377,6 +381,21 @@ def main(
         ) as ph:
             commit(ph, document)
 
+    with run.phase(
+        PhaseParams(
+            name="tui_capture",
+            kind="code",
+            owner="tui",
+            description="Capture the same TUI scenes on the baseline and on HEAD — evidence, never a gate",
+        )
+    ) as ph:
+        screens = tui.capture(run, TuiParams(config=cfg.evidence.tui, baseline=baseline))
+        ph.log(
+            configured=screens.configured,
+            changed=[s.name for s in screens.scenes if s.changed],
+            failed=screens.error or [s.name for s in screens.scenes if s.error],
+        )
+
     reason = "the suite, lint, the red/green proof, the test-integrity check or the review never came back clean"
     with run.phase(
         PhaseParams(
@@ -404,9 +423,12 @@ def main(
                 integrity=intact,
                 new_tests=evidence.new_tests(baseline, quality.TEST_FILES),
                 review=review,
+                tui=screens,
                 unverified=cfg.evidence.unverified,
                 tokens=run.tokens,
                 cost=run.cost,
+                usage=list(run.usage.values()),
+                subscription=cfg.evidence.subscription,
             ),
         )
         ph.log(path=str(path))

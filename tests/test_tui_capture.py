@@ -349,7 +349,7 @@ def test_interruption_still_cleans_up(setup):
 
 
 def test_example():
-    config = capture.load_scenes(ROOT / "scripts/tui_scenes.example.json")
+    config = capture.load_scenes(ROOT / "scripts/tui_scenes.json")
     assert config["size"] == [100, 30]
     assert config["ready"] == "成语接龙开始"
     assert config["timeout_seconds"] == 10
@@ -357,15 +357,16 @@ def test_example():
         config["launch"]
         == "pi -ne -nbt -ns -np -nc --no-session --thinking off -e ./src/extension/index.ts --model deepseek/deepseek-flash"
     )
-    assert [s["name"] for s in config["scenes"]] == ["status", "help"]
+    assert [s["name"] for s in config["scenes"]] == ["status", "help", "chain"]
     assert len(config["masks"]) == 3
     assert config["scenes"][0]["steps"] == [{"text": "/status"}, {"key": "Enter"}, {"wait_for": "📊 状态"}]
     assert config["scenes"][1]["steps"] == [{"text": "/help"}, {"key": "Enter"}, {"wait_for": "📖 成语接龙"}]
+    assert config["scenes"][2]["steps"] == [{"text": "/chain"}, {"key": "Enter"}, {"wait_for": "📜 接龙链"}]
 
 
 @pytest.mark.parametrize("branch", ["(main)", "(factory/issue-19)", "(factory/iss...", "(baseline..."])
 def test_example_masks_complete_and_truncated_footer(setup, branch):
-    config = capture.load_scenes(ROOT / "scripts/tui_scenes.example.json")
+    config = capture.load_scenes(ROOT / "scripts/tui_scenes.json")
     text = f"{setup.repo} {branch}\n~/repo 'with spaces' {branch}\nkeep  \n"
     assert capture.normalize_screen(text, setup.repo, setup.home, config["masks"]) == (
         "<repo> (<branch>)\n<repo> (<branch>)\nkeep  \n"

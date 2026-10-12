@@ -10,6 +10,7 @@
   ],
   "scenes": [
     {"name": "status", "steps": [{"text": "/status"}, {"key": "Enter"}, {"wait_for": "📊 状态"}]},
-    {"name": "help", "steps": [{"text": "/help"}, {"key": "Enter"}, {"wait_for": "📖 成语接龙"}]}
+    {"name": "help", "steps": [{"text": "/help"}, {"key": "Enter"}, {"wait_for": "📖 成语接龙"}]},
+    {"name": "chain", "steps": [{"text": "/chain"}, {"key": "Enter"}, {"wait_for": "📜 接龙链"}]}
   ]
 }

@@ -9,6 +9,7 @@ Usage:
 
 Phases: engineer(request) -> builder -> code(test+lint) -> code(prove) -> code(integrity)
         [-> builder(fix | restore) -> code(test+lint) -> code(prove) -> code(integrity) ... bounded]
+        -> code(tui_capture: the same scenes on baseline and HEAD, if evidence.tui is set)
         -> code(evidence: context_handoff/evidence.md, accepted or not)
 
 Testing and lint are CODE. Their commands are written down in adw_modules/quality.py,
@@ -27,16 +28,26 @@ does not know what kind of work it was given. The integrity check
 test file, or fewer tests or expect() calls than the baseline sends the builder
 back, unless it declared that weakening in `weakened_tests`.
 
-The run ends by writing what its code recorded into the session's evidence.md
-(adw_modules/evidence.py); adw_pr_feedback appends it to its reply on the PR.
+The run ends by capturing the TUI scenes of `evidence.tui` on the baseline and
+on HEAD (adw_modules/tui.py), then writing what its code recorded into the
+session's evidence.md (adw_modules/evidence.py); adw_pr_feedback appends it to
+its reply on the PR.
 This chain does not commit, so the bundle names HEAD as the uncommitted tree.
 """
 
 import argparse
 import sys
 
-from adw_modules import agents, evidence, gates, git_helper, integrity, proof, quality, session, utils
-from adw_modules.data_types import AgentCall, BuildOutput, EvidenceInput, IntegrityParams, PhaseParams, ProofParams
+from adw_modules import agents, evidence, gates, git_helper, integrity, proof, quality, session, tui, utils
+from adw_modules.data_types import (
+    AgentCall,
+    BuildOutput,
+    EvidenceInput,
+    IntegrityParams,
+    PhaseParams,
+    ProofParams,
+    TuiParams,
+)
 
 REQUIRED_AGENTS = ["builder"]
 MAX_FIX_LOOPS = 3
@@ -152,6 +163,21 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
             )
 
     accepted = test is not None and test.passed and intact is not None and intact.passed
+    with run.phase(
+        PhaseParams(
+            name="tui_capture",
+            kind="code",
+            owner="tui",
+            description="Capture the same TUI scenes on the baseline and on HEAD — evidence, never a gate",
+        )
+    ) as ph:
+        screens = tui.capture(run, TuiParams(config=cfg.evidence.tui, baseline=baseline))
+        ph.log(
+            configured=screens.configured,
+            changed=[s.name for s in screens.scenes if s.changed],
+            failed=screens.error or [s.name for s in screens.scenes if s.error],
+        )
+
     reason = f"the suite, lint or the test-integrity check still failed after {MAX_FIX_LOOPS} fix attempt(s)"
     with run.phase(
         PhaseParams(
@@ -176,9 +202,12 @@ def main(prompt: str, config: str = "adws/adw_sssf_config/sssf.config.yaml", adw
                 proof=proven,
                 integrity=intact,
                 new_tests=evidence.new_tests(baseline, quality.TEST_FILES),
+                tui=screens,
                 unverified=cfg.evidence.unverified,
                 tokens=run.tokens,
                 cost=run.cost,
+                usage=list(run.usage.values()),
+                subscription=cfg.evidence.subscription,
             ),
         )
         ph.log(path=str(path))

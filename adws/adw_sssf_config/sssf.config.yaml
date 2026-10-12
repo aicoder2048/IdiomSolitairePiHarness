@@ -48,6 +48,14 @@ observability:
 evidence:
   unverified:                      # what this factory never checks — said in every PR, not left implied
     - 未运行 `just smoke`（会调用 DeepSeek，按量计费；工厂不跑）
+  subscription: [openai-codex]     # billed by subscription: Pi's list price is shown, nobody pays it
+  tui:                             # text screenshots of the same scenes on the baseline and on HEAD
+    argv: [just, tui-capture, "{scenes}", "{out}", "{repo}"]
+    scenes: scripts/tui_scenes.json
+    uncaptured:                    # screens no offline scene reaches: each needs a model reply
+      - 终局结算画面（需要 Bot 回合）
+      - 有内容的接龙链和 Bot 出词后的回合卡片（需要 Bot 回合）
+      - /hint 候选选择框（需要模型给出候选）
 
 agents:
   - name: planner
