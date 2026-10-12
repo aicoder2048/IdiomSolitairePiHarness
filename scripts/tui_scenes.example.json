@@ -1,0 +1,15 @@
+{
+  "launch": "pi -ne -nbt -ns -np -nc --no-session --thinking off -e ./src/extension/index.ts --model deepseek/deepseek-flash",
+  "size": [100, 30],
+  "ready": "成语接龙开始",
+  "timeout_seconds": 10,
+  "masks": [
+    {"pattern": "(?<=⏱ )\\d+"},
+    {"pattern": "(?<=本轮剩 )\\d+"},
+    {"pattern": "(?<=<repo> \\()[^)]*(?=\\)$)", "replace": "<branch>"}
+  ],
+  "scenes": [
+    {"name": "status", "steps": [{"text": "/status"}, {"key": "Enter"}, {"wait_for": "📊 状态"}]},
+    {"name": "help", "steps": [{"text": "/help"}, {"key": "Enter"}, {"wait_for": "📖 成语接龙"}]}
+  ]
+}

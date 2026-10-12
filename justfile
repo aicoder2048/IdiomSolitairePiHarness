@@ -27,6 +27,10 @@ play:
 smoke:
     bun run scripts/smoke.ts
 
+# 手动离线 TUI 截屏：需要 tmux 和场景指定的 TUI；不加入工厂测试
+tui-capture scenes out repo=".":
+    uv run scripts/tui_capture.py --repo "$3" --scenes "$1" --out "$2"
+
 # ── 测试与检查 ──────────────────────────────────────────────────────────────
 
 # every suite, offline (also the factory's quality gate: adw_modules/quality.py runs `just test`)
@@ -35,6 +39,7 @@ test:
     bun test
     just test-adws
     just test-autoqueue
+    just test-tui-capture
 
 typecheck:
     bunx tsc --noEmit
@@ -55,6 +60,10 @@ test-adws:
 # the unattended issue runner: real local git, canned GitHub
 test-autoqueue:
     uv run --no-project --with pytest pytest tests/test_autoqueue.py -q
+
+# capture engine: scripted tmux only, never starts a terminal or model
+test-tui-capture:
+    uv run --no-project --with pytest pytest tests/test_tui_capture.py -q
 
 # ── 软件工厂：跑一个 workflow ───────────────────────────────────────────────
 # Args pass straight through: "<prompt or path/to/prompt.md>" [--adw-id X]
